@@ -1,0 +1,44 @@
+{
+  "scorers": [
+    {
+      "player": { "id": 10, "name": "Erling Haaland", "nationality": "Norway" },
+      "team": { "id": 65, "name": "Manchester City", "shortName": "Man City", "crest": "https://crests.football-data.org/65.png" },
+      "goals": 27, "assists": 5, "playedMatches": 35
+    },
+    {
+      "player": { "id": 20, "name": "Mohamed Salah", "nationality": "Egypt" },
+      "team": { "id": 64, "name": "Liverpool", "shortName": "Liverpool", "crest": "https://crests.football-data.org/64.png" },
+      "goals": 25, "assists": 12, "playedMatches": 36
+    },
+    {
+      "player": { "id": 30, "name": "Cole Palmer", "nationality": "England" },
+      "team": { "id": 61, "name": "Chelsea", "shortName": "Chelsea", "crest": "https://crests.football-data.org/61.png" },
+      "goals": 22, "assists": 11, "playedMatches": 35
+    },
+    {
+      "player": { "id": 40, "name": "Son Heung-min", "nationality": "South Korea" },
+      "team": { "id": 73, "name": "Tottenham Hotspur", "shortName": "Tottenham", "crest": "https://crests.football-data.org/73.png" },
+      "goals": 19, "assists": 9, "playedMatches": 34
+    },
+    {
+      "player": { "id": 73, "name": "Joao Pedro", "nationality": "Brazil" },
+      "team": { "id": 397, "name": "Brighton & Hove Albion", "shortName": "Brighton", "crest": "https://crests.football-data.org/397.png" },
+      "goals": 18, "assists": 6, "playedMatches": 35
+    },
+    {
+      "player": { "id": 60, "name": "Ollie Watkins", "nationality": "England" },
+      "team": { "id": 58, "name": "Aston Villa", "shortName": "Aston Villa", "crest": "https://crests.football-data.org/58.png" },
+      "goals": 18, "assists": 8, "playedMatches": 36
+    },
+    {
+      "player": { "id": 1, "name": "Bukayo Saka", "nationality": "England" },
+      "team": { "id": 57, "name": "Arsenal", "shortName": "Arsenal", "crest": "https://crests.football-data.org/57.png" },
+      "goals": 16, "assists": 10, "playedMatches": 33
+    },
+    {
+      "player": { "id": 70, "name": "Kaoru Mitoma", "nationality": "Japan" },
+      "team": { "id": 397, "name": "Brighton & Hove Albion", "shortName": "Brighton", "crest": "https://crests.football-data.org/397.png" },
+      "goals": 14, "assists": 4, "playedMatches": 31
+    }
+  ]
+}

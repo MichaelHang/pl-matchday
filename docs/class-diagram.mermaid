@@ -1,0 +1,226 @@
+classDiagram
+    direction LR
+
+    class Competition {
+        +Int id
+        +String name
+        +String code
+        +String emblem
+    }
+
+    class Team {
+        +Int id
+        +String name
+        +String shortName
+        +String tla
+        +String crest
+        +String venue
+        +Coach~opt~ coach
+        +Array~Player~ squad
+    }
+
+    class Coach {
+        +Int id
+        +String name
+        +String nationality
+    }
+
+    class Player {
+        +Int id
+        +String name
+        +String position
+        +Int~opt~ shirtNumber
+        +String nationality
+    }
+
+    class Standing {
+        +Int position
+        +Team team
+        +Int playedGames
+        +Int won
+        +Int draw
+        +Int lost
+        +Int points
+        +Int goalsFor
+        +Int goalsAgainst
+        +Int goalDifference
+        +String~opt~ form
+        +String~opt~ status
+    }
+
+    class Match {
+        +Int id
+        +String utcDate
+        +String status
+        +Int matchday
+        +Team homeTeam
+        +Team awayTeam
+        +Score score
+    }
+
+    class Score {
+        +ScoreDetail fullTime
+        +ScoreDetail halfTime
+    }
+
+    class ScoreDetail {
+        +Int~opt~ home
+        +Int~opt~ away
+    }
+
+    class Scorer {
+        +Player player
+        +Team team
+        +Int goals
+        +Int~opt~ assists
+        +Int~opt~ playedMatches
+    }
+
+    class DataSource {
+        <<enum>>
+        +api
+        +local
+        +label String
+    }
+
+    Team "1" *-- "0..1" Coach : has
+    Team "1" *-- "0..*" Player : squad
+    Standing --> Team : team
+    Match --> Team : homeTeam
+    Match --> Team : awayTeam
+    Match --> Score : score
+    Score *-- ScoreDetail : fullTime
+    Score *-- ScoreDetail : halfTime
+    Scorer --> Player : player
+    Scorer --> Team : team
+
+    class Endpoint {
+        <<enum>>
+        +standings(season String)
+        +matches(season String)
+        +teams
+        +team(id Int)
+        +scorers(season String)
+        +path String
+        +query Array~URLQueryItem~
+    }
+
+    class APIClient {
+        -URLSession session
+        +get(_ endpoint Endpoint, token String) async throws Data
+    }
+
+    class APIKeyStore {
+        -UserDefaults defaults
+        +key String~opt~ {get set}
+        +hasKey Bool
+    }
+
+    class SeasonStore {
+        -UserDefaults defaults
+        +current String
+        +available Array~String~
+    }
+
+    class LocalDataLoader {
+        -Bundle bundle
+        +loadStandings(season String) Array~Standing~
+        +loadMatches(season String) Array~Match~
+        +loadTeams() Array~Team~
+        +loadScorers(season String) Array~Scorer~
+        +loadCompetition() Competition
+    }
+
+    class CacheStore {
+        -NSCache cache
+        +value(forKey String) Any~opt~
+        +set(_ value Any, forKey String)
+    }
+
+    class DataRepository {
+        -APIClient api
+        -APIKeyStore keyStore
+        -LocalDataLoader local
+        -CacheStore cache
+        +fetchStandings(season String) async ([Standing], DataSource)
+        +fetchMatches(season String) async ([Match], DataSource)
+        +fetchTeams() async ([Team], DataSource)
+        +fetchTeam(id Int) async (Team, DataSource)
+        +fetchScorers(season String) async ([Scorer], DataSource)
+    }
+
+    APIClient --> Endpoint : builds URL
+    DataRepository --> APIClient : uses
+    DataRepository --> APIKeyStore : reads
+    DataRepository --> LocalDataLoader : fallback
+    DataRepository --> CacheStore : caches
+
+    class AppState {
+        <<@Observable>>
+        +DataSource source
+        +String season
+        +Section selection
+        +Bool showSettings
+    }
+
+    class StandingsViewModel {
+        <<@Observable>>
+        -DataRepository repo
+        +ViewState state
+        +Array~Standing~ items
+        +load(season String) async
+        +refresh() async
+    }
+    class FixturesViewModel {
+        <<@Observable>>
+        -DataRepository repo
+        +ViewState state
+        +Array~Match~ items
+        +filter: MatchFilter
+        +load(season String) async
+    }
+    class TeamsViewModel {
+        <<@Observable>>
+        -DataRepository repo
+        +ViewState state
+        +Array~Team~ teams
+        +selected: Team~opt~
+        +loadTeamDetail(id Int) async
+    }
+    class TopScorersViewModel {
+        <<@Observable>>
+        -DataRepository repo
+        +ViewState state
+        +Array~Scorer~ items
+        +load(season String) async
+    }
+
+    StandingsViewModel --> DataRepository : uses
+    FixturesViewModel --> DataRepository : uses
+    TeamsViewModel --> DataRepository : uses
+    TopScorersViewModel --> DataRepository : uses
+
+    class ContentView
+    class Sidebar
+    class TopBar
+    class StandingsView
+    class FixturesView
+    class TeamsView
+    class TeamDetailView
+    class TopScorersView
+    class SettingsView
+    class LoadingView
+    class EmptyView
+    class ErrorView
+
+    ContentView --> Sidebar
+    ContentView --> TopBar
+    Sidebar --> AppState : reads
+    TopBar --> AppState : reads
+    StandingsView --> StandingsViewModel : observes
+    FixturesView --> FixturesViewModel : observes
+    TeamsView --> TeamsViewModel : observes
+    TopScorersView --> TopScorersViewModel : observes
+    TeamDetailView --> TeamsViewModel : observes
+    SettingsView --> APIKeyStore : binds
+    SettingsView --> SeasonStore : binds

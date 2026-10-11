@@ -1,0 +1,48 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant App as EPLViewerApp
+    participant State as AppState
+    participant UI as ContentView/Sidebar/TopBar
+    participant VM as StandingsViewModel
+    participant Repo as DataRepository
+    participant Key as APIKeyStore
+    participant API as APIClient
+    participant Local as LocalDataLoader
+
+    App->>State: init() 读取 UserDefaults(season, apiKey)
+    State-->>UI: source 待定 / season="2024"
+    User->>UI: 选择「积分榜」
+    UI->>VM: .onAppear → load(season)
+    VM->>VM: state = .loading
+    VM->>Repo: fetchStandings(season)
+    Repo->>Key: hasKey ?
+    alt 无 API Key
+        Repo->>Local: loadStandings(season)
+        Local-->>Repo: [Standing]
+        Repo-->>VM: (items, .local)
+        VM->>State: source = .local
+    else 有 API Key
+        Repo->>API: get(.standings, token)
+        alt HTTP 200
+            API-->>Repo: JSON
+            Repo->>Repo: decode → [Standing]
+            Repo-->>VM: (items, .api)
+            VM->>State: source = .api
+        else 429 / 网络错误
+            Repo->>Local: loadStandings(season)
+            Local-->>Repo: [Standing]
+            Repo-->>VM: (items, .local)
+            VM->>State: source = .local
+        else 其他 API 错误(403/400)
+            Repo-->>VM: throw EPLViewerError
+            VM->>VM: state = .error
+        end
+    end
+    VM-->>UI: items / state
+    UI->>UI: 渲染 StandingsView（或 Loading/Empty/Error 三态）
+    State-->>UI: TopBar 显示来源标识（示例数据 / football-data.org）
+    User->>UI: 点击刷新
+    UI->>VM: refresh()
+    VM->>Repo: fetchStandings(season)（经 CacheStore 节流）
+    Note over Repo,Local: 重复上述回退决策

@@ -1,0 +1,66 @@
+{
+  "standings": [
+    {
+      "stage": "REGULAR_SEASON",
+      "type": "TOTAL",
+      "table": [
+        {
+          "position": 1,
+          "team": { "id": 65, "name": "Manchester City", "shortName": "Man City", "crest": "https://crests.football-data.org/65.png", "venue": "Etihad Stadium", "founded": 1880 },
+          "playedGames": 38, "won": 28, "draw": 7, "lost": 3, "points": 91,
+          "goalsFor": 90, "goalsAgainst": 35, "goalDifference": 55,
+          "form": "W,W,D,L,W", "status": "CHAMPIONS_LEAGUE"
+        },
+        {
+          "position": 2,
+          "team": { "id": 57, "name": "Arsenal", "shortName": "Arsenal", "crest": "https://crests.football-data.org/57.png", "venue": "Emirates Stadium", "founded": 1886 },
+          "playedGames": 38, "won": 26, "draw": 6, "lost": 6, "points": 84,
+          "goalsFor": 85, "goalsAgainst": 40, "goalDifference": 45,
+          "form": "W,D,W,W,L", "status": "CHAMPIONS_LEAGUE"
+        },
+        {
+          "position": 3,
+          "team": { "id": 64, "name": "Liverpool", "shortName": "Liverpool", "crest": "https://crests.football-data.org/64.png", "venue": "Anfield", "founded": 1892 },
+          "playedGames": 38, "won": 24, "draw": 9, "lost": 5, "points": 81,
+          "goalsFor": 82, "goalsAgainst": 38, "goalDifference": 44,
+          "form": "W,W,D,W,W", "status": "CHAMPIONS_LEAGUE"
+        },
+        {
+          "position": 4,
+          "team": { "id": 58, "name": "Aston Villa", "shortName": "Aston Villa", "crest": "https://crests.football-data.org/58.png", "venue": "Villa Park", "founded": 1874 },
+          "playedGames": 38, "won": 21, "draw": 10, "lost": 7, "points": 73,
+          "goalsFor": 78, "goalsAgainst": 45, "goalDifference": 33,
+          "form": "D,W,W,D,W", "status": "CHAMPIONS_LEAGUE"
+        },
+        {
+          "position": 5,
+          "team": { "id": 73, "name": "Tottenham Hotspur", "shortName": "Tottenham", "crest": "https://crests.football-data.org/73.png", "venue": "Tottenham Hotspur Stadium", "founded": 1882 },
+          "playedGames": 38, "won": 19, "draw": 8, "lost": 11, "points": 65,
+          "goalsFor": 70, "goalsAgainst": 50, "goalDifference": 20,
+          "form": "L,W,D,L,W", "status": null
+        },
+        {
+          "position": 6,
+          "team": { "id": 67, "name": "Newcastle United", "shortName": "Newcastle", "crest": "https://crests.football-data.org/67.png", "venue": "St James' Park", "founded": 1892 },
+          "playedGames": 38, "won": 18, "draw": 9, "lost": 11, "points": 63,
+          "goalsFor": 72, "goalsAgainst": 52, "goalDifference": 20,
+          "form": "W,D,L,W,D", "status": null
+        },
+        {
+          "position": 7,
+          "team": { "id": 397, "name": "Brighton & Hove Albion", "shortName": "Brighton", "crest": "https://crests.football-data.org/397.png", "venue": "Amex Stadium", "founded": 1901 },
+          "playedGames": 38, "won": 10, "draw": 10, "lost": 18, "points": 40,
+          "goalsFor": 50, "goalsAgainst": 60, "goalDifference": -10,
+          "form": "L,L,D,L,D", "status": "RELEGATION"
+        },
+        {
+          "position": 8,
+          "team": { "id": 61, "name": "Chelsea", "shortName": "Chelsea", "crest": "https://crests.football-data.org/61.png", "venue": "Stamford Bridge", "founded": 1905 },
+          "playedGames": 38, "won": 9, "draw": 9, "lost": 20, "points": 36,
+          "goalsFor": 48, "goalsAgainst": 65, "goalDifference": -17,
+          "form": "L,D,L,L,D", "status": "RELEGATION"
+        }
+      ]
+    }
+  ]
+}

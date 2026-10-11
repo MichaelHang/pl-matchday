@@ -1,0 +1,538 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		027B5C17D53FA74189E1405D /* scorers.json in Resources */ = {isa = PBXBuildFile; fileRef = D86A28D0C602C99BC683E77F /* scorers.json */; };
+		08FF2C80D2640D98AE9BCD71 /* StandingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76453380B5757C381C7C3A4C /* StandingsView.swift */; };
+		0983A04A3A1326A1AD2A8169 /* PlayerNameOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B2A9DC6728D18F6D3EBBE73 /* PlayerNameOverrides.swift */; };
+		1175FDCE4C1360B1F7653FB8 /* PlayerNameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA3DB4B8E39B638976FB5E0 /* PlayerNameManager.swift */; };
+		11AE4AD1259200073E688AD7 /* standings.json in Resources */ = {isa = PBXBuildFile; fileRef = D3294CFCB1608F938F1854E1 /* standings.json */; };
+		1D456420F2D895E8548E03B7 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15E542D7622667B6C97F6E89 /* Models.swift */; };
+		2E4B4FADBD38DAB57DC2837F /* TeamNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57504297F1981C95E10F30E5 /* TeamNames.swift */; };
+		2E5E37D811893845F6064474 /* matches.json in Resources */ = {isa = PBXBuildFile; fileRef = EB79D4687986BE2F16E63F3D /* matches.json */; };
+		2F17153C7B40A3056DC9765A /* TopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD67A4258B11BABCFF1D35E6 /* TopBar.swift */; };
+		3418DFCE19AC35A61779C9E1 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */; };
+		441F92ABF37B80DFAF483F52 /* EPLViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D14B636B2DA6890E83CF35B /* EPLViewerApp.swift */; };
+		5CCE14E70863F23AE88BF93E /* Services.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A8B4A692963B1541FA0C5E /* Services.swift */; };
+		7037E4495E5CE53BCDDFF545 /* LeadersAndInjuriesViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3B23115414516A550FF6D2 /* LeadersAndInjuriesViews.swift */; };
+		7740A4C3225DB68D84D12937 /* FixturesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 139C38AD58A17156EC65A479 /* FixturesView.swift */; };
+		84BEF90F73528F0EE94E77DD /* PlayerNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26FBFC5878AFAC88A152EC83 /* PlayerNames.swift */; };
+		8BF0D70EF12CD2C1A2E70761 /* injuries.json in Resources */ = {isa = PBXBuildFile; fileRef = 12D1CA8609C07D3B59E9A28F /* injuries.json */; };
+		90A6ACFCA7BAB60B9BF975AA /* EPLViewerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2271258EBEC2CE84298BA007 /* EPLViewerTests.swift */; };
+		9D962840F37E6D6B97752FFF /* CommonViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450552BD5F1C302078E1B082 /* CommonViews.swift */; };
+		BB530E098E4FA6454B6AE6E9 /* UIStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */; };
+		C4258A9BEA11227C3F48B39E /* Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E496DC28C14142C15CE7980E /* Sidebar.swift */; };
+		CBF60F39F7202C9E7E87EFF0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4674FDC1DC3BA39E687A625B /* Assets.xcassets */; };
+		FDD7B5BC36E668995FA1E463 /* teams.json in Resources */ = {isa = PBXBuildFile; fileRef = 103C549C71A6D4B85B2167C8 /* teams.json */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AF22F081F259114DEB241558 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5480A2B10CA1938B9743B24D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F3F51F7D44B9D42B0D33D961;
+			remoteInfo = EPLViewer;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0AA3DB4B8E39B638976FB5E0 /* PlayerNameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerNameManager.swift; sourceTree = "<group>"; };
+		103C549C71A6D4B85B2167C8 /* teams.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = teams.json; sourceTree = "<group>"; };
+		12D1CA8609C07D3B59E9A28F /* injuries.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = injuries.json; sourceTree = "<group>"; };
+		139C38AD58A17156EC65A479 /* FixturesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixturesView.swift; sourceTree = "<group>"; };
+		15E542D7622667B6C97F6E89 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		2271258EBEC2CE84298BA007 /* EPLViewerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPLViewerTests.swift; sourceTree = "<group>"; };
+		26FBFC5878AFAC88A152EC83 /* PlayerNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerNames.swift; sourceTree = "<group>"; };
+		29A8B4A692963B1541FA0C5E /* Services.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services.swift; sourceTree = "<group>"; };
+		3B2A9DC6728D18F6D3EBBE73 /* PlayerNameOverrides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerNameOverrides.swift; sourceTree = "<group>"; };
+		450552BD5F1C302078E1B082 /* CommonViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommonViews.swift; sourceTree = "<group>"; };
+		4674FDC1DC3BA39E687A625B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4D14B636B2DA6890E83CF35B /* EPLViewerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPLViewerApp.swift; sourceTree = "<group>"; };
+		4E3B23115414516A550FF6D2 /* LeadersAndInjuriesViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeadersAndInjuriesViews.swift; sourceTree = "<group>"; };
+		57504297F1981C95E10F30E5 /* TeamNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamNames.swift; sourceTree = "<group>"; };
+		76453380B5757C381C7C3A4C /* StandingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandingsView.swift; sourceTree = "<group>"; };
+		90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIStrings.swift; sourceTree = "<group>"; };
+		A8D19644DA34A882A38BC165 /* EPLViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EPLViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
+		D3294CFCB1608F938F1854E1 /* standings.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = standings.json; sourceTree = "<group>"; };
+		D86A28D0C602C99BC683E77F /* scorers.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = scorers.json; sourceTree = "<group>"; };
+		E496DC28C14142C15CE7980E /* Sidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sidebar.swift; sourceTree = "<group>"; };
+		EB79D4687986BE2F16E63F3D /* matches.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = matches.json; sourceTree = "<group>"; };
+		F51E9E7966298B718AC7D1D5 /* EPLViewerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EPLViewerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FD67A4258B11BABCFF1D35E6 /* TopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBar.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		152D6D3F7B1663057FC5E63F /* EPLViewer */ = {
+			isa = PBXGroup;
+			children = (
+				4674FDC1DC3BA39E687A625B /* Assets.xcassets */,
+				450552BD5F1C302078E1B082 /* CommonViews.swift */,
+				4D14B636B2DA6890E83CF35B /* EPLViewerApp.swift */,
+				139C38AD58A17156EC65A479 /* FixturesView.swift */,
+				4E3B23115414516A550FF6D2 /* LeadersAndInjuriesViews.swift */,
+				15E542D7622667B6C97F6E89 /* Models.swift */,
+				0AA3DB4B8E39B638976FB5E0 /* PlayerNameManager.swift */,
+				3B2A9DC6728D18F6D3EBBE73 /* PlayerNameOverrides.swift */,
+				26FBFC5878AFAC88A152EC83 /* PlayerNames.swift */,
+				29A8B4A692963B1541FA0C5E /* Services.swift */,
+				E496DC28C14142C15CE7980E /* Sidebar.swift */,
+				76453380B5757C381C7C3A4C /* StandingsView.swift */,
+				57504297F1981C95E10F30E5 /* TeamNames.swift */,
+				B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */,
+				FD67A4258B11BABCFF1D35E6 /* TopBar.swift */,
+				90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */,
+				A9D082F08F6CE332EC905699 /* Resources */,
+			);
+			path = EPLViewer;
+			sourceTree = "<group>";
+		};
+		15CC55FCC2F89C0A705BBBD8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A8D19644DA34A882A38BC165 /* EPLViewer.app */,
+				F51E9E7966298B718AC7D1D5 /* EPLViewerTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		33A06E4CE4E46AAEDF7015DD = {
+			isa = PBXGroup;
+			children = (
+				AD1E972C391B34A733178221 /* Sources */,
+				5E3F40E906CE54E1A20CD79D /* Tests */,
+				15CC55FCC2F89C0A705BBBD8 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5E3F40E906CE54E1A20CD79D /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				F451209C8EDB94A0C1F221E6 /* EPLViewerTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		A9D082F08F6CE332EC905699 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				12D1CA8609C07D3B59E9A28F /* injuries.json */,
+				EB79D4687986BE2F16E63F3D /* matches.json */,
+				D86A28D0C602C99BC683E77F /* scorers.json */,
+				D3294CFCB1608F938F1854E1 /* standings.json */,
+				103C549C71A6D4B85B2167C8 /* teams.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		AD1E972C391B34A733178221 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				152D6D3F7B1663057FC5E63F /* EPLViewer */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		F451209C8EDB94A0C1F221E6 /* EPLViewerTests */ = {
+			isa = PBXGroup;
+			children = (
+				2271258EBEC2CE84298BA007 /* EPLViewerTests.swift */,
+			);
+			path = EPLViewerTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EFACB5B32D6B4A56979226F0 /* EPLViewerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9D4CC776098CC63B62CFE415 /* Build configuration list for PBXNativeTarget "EPLViewerTests" */;
+			buildPhases = (
+				78F8A86FA8F1FE1DE934947F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3C8826683FEF3414E250BFE4 /* PBXTargetDependency */,
+			);
+			name = EPLViewerTests;
+			packageProductDependencies = (
+			);
+			productName = EPLViewerTests;
+			productReference = F51E9E7966298B718AC7D1D5 /* EPLViewerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		F3F51F7D44B9D42B0D33D961 /* EPLViewer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6F3CF6A1DA05AFB66D5FFBAD /* Build configuration list for PBXNativeTarget "EPLViewer" */;
+			buildPhases = (
+				4671614A9F826EF063F33509 /* Sources */,
+				BEC05CA62E1E25BF59B27030 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = EPLViewer;
+			packageProductDependencies = (
+			);
+			productName = EPLViewer;
+			productReference = A8D19644DA34A882A38BC165 /* EPLViewer.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5480A2B10CA1938B9743B24D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					EFACB5B32D6B4A56979226F0 = {
+						ProvisioningStyle = Automatic;
+					};
+					F3F51F7D44B9D42B0D33D961 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 32FCF077D284789EBA626298 /* Build configuration list for PBXProject "EPLViewer" */;
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = 33A06E4CE4E46AAEDF7015DD;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 15CC55FCC2F89C0A705BBBD8 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F3F51F7D44B9D42B0D33D961 /* EPLViewer */,
+				EFACB5B32D6B4A56979226F0 /* EPLViewerTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		BEC05CA62E1E25BF59B27030 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CBF60F39F7202C9E7E87EFF0 /* Assets.xcassets in Resources */,
+				8BF0D70EF12CD2C1A2E70761 /* injuries.json in Resources */,
+				2E5E37D811893845F6064474 /* matches.json in Resources */,
+				027B5C17D53FA74189E1405D /* scorers.json in Resources */,
+				11AE4AD1259200073E688AD7 /* standings.json in Resources */,
+				FDD7B5BC36E668995FA1E463 /* teams.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4671614A9F826EF063F33509 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9D962840F37E6D6B97752FFF /* CommonViews.swift in Sources */,
+				441F92ABF37B80DFAF483F52 /* EPLViewerApp.swift in Sources */,
+				7740A4C3225DB68D84D12937 /* FixturesView.swift in Sources */,
+				7037E4495E5CE53BCDDFF545 /* LeadersAndInjuriesViews.swift in Sources */,
+				1D456420F2D895E8548E03B7 /* Models.swift in Sources */,
+				1175FDCE4C1360B1F7653FB8 /* PlayerNameManager.swift in Sources */,
+				0983A04A3A1326A1AD2A8169 /* PlayerNameOverrides.swift in Sources */,
+				84BEF90F73528F0EE94E77DD /* PlayerNames.swift in Sources */,
+				5CCE14E70863F23AE88BF93E /* Services.swift in Sources */,
+				C4258A9BEA11227C3F48B39E /* Sidebar.swift in Sources */,
+				08FF2C80D2640D98AE9BCD71 /* StandingsView.swift in Sources */,
+				2E4B4FADBD38DAB57DC2837F /* TeamNames.swift in Sources */,
+				3418DFCE19AC35A61779C9E1 /* TodayView.swift in Sources */,
+				2F17153C7B40A3056DC9765A /* TopBar.swift in Sources */,
+				BB530E098E4FA6454B6AE6E9 /* UIStrings.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		78F8A86FA8F1FE1DE934947F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				90A6ACFCA7BAB60B9BF975AA /* EPLViewerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3C8826683FEF3414E250BFE4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F3F51F7D44B9D42B0D33D961 /* EPLViewer */;
+			targetProxy = AF22F081F259114DEB241558 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4F4DC62940AF8F6E78E71892 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = EPLViewer/EPLViewer.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSSupportsAutomaticTermination = YES;
+				INFOPLIST_KEY_NSSupportsSuddenTermination = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_ENABLE_BATCH_MODE = NO;
+			};
+			name = Release;
+		};
+		5695229CBA1AA00630215783 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = EPLViewer/EPLViewer.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSSupportsAutomaticTermination = YES;
+				INFOPLIST_KEY_NSSupportsSuddenTermination = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_ENABLE_BATCH_MODE = NO;
+			};
+			name = Debug;
+		};
+		5B98305DDAC4FE544C30FF40 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_ENABLE_BATCH_MODE = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPLViewer.app/Contents/MacOS/EPLViewer";
+			};
+			name = Debug;
+		};
+		73C91EE1516DBCEDB9B6033B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_ENABLE_BATCH_MODE = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPLViewer.app/Contents/MacOS/EPLViewer";
+			};
+			name = Release;
+		};
+		E553CDB9D3A47E2A34137201 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 2.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.eplviewer.app;
+				PRODUCT_NAME = EPLViewer;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_USE_INTEGRATED_DRIVER = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		ECA5135A03025840D9526A3E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 2.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.eplviewer.app;
+				PRODUCT_NAME = EPLViewer;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_USE_INTEGRATED_DRIVER = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		32FCF077D284789EBA626298 /* Build configuration list for PBXProject "EPLViewer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ECA5135A03025840D9526A3E /* Debug */,
+				E553CDB9D3A47E2A34137201 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6F3CF6A1DA05AFB66D5FFBAD /* Build configuration list for PBXNativeTarget "EPLViewer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5695229CBA1AA00630215783 /* Debug */,
+				4F4DC62940AF8F6E78E71892 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9D4CC776098CC63B62CFE415 /* Build configuration list for PBXNativeTarget "EPLViewerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5B98305DDAC4FE544C30FF40 /* Debug */,
+				73C91EE1516DBCEDB9B6033B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5480A2B10CA1938B9743B24D /* Project object */;
+}
