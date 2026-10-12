@@ -8,10 +8,7 @@ xcuserdata/                        # 用户专属 workspace 数据
 *.xcworkspacedata
 
 # ── 构建缓存（体积巨大，必须忽略）──
-.build/                           
-EPLViewer/build/                  
-EPLViewer/.build
-EPLViewer/EPLViewer.app/
+.build/
 build/
 *.app/
 .swiftpm/

@@ -27,7 +27,7 @@
 ### 方式 1：直接用 Xcode 26 打开（推荐）
 
 ```bash
-open /Users/hangbo/Code/Github/PremierLeague/EPLViewer/EPLViewer.xcodeproj
+open /Users/hangbo/Code/Github/PremierLeague/EPLViewer.xcodeproj
 # Xcode 里 Cmd+R 运行（Cmd+U 跑测试）
 ```
 
@@ -56,22 +56,18 @@ open build/EPLViewer.app      # 在 Finder 双击也可
 ## 工程结构
 
 ```
-EPLViewer/
-├── build-app.sh                 # 用 xcodebuild 打 .app Bundle
-├── Sources/EPLViewer/
-│   ├── EPLViewerApp.swift       # @main 入口 + AppState（@Observable）
-│   ├── Models.swift             # 内部数据模型（Snake→camelCase 解码）
-│   ├── Services.swift           # 数据层（CacheStore + ESPNProvider + FPLProvider + DataRepository + 翻译器 + 回退逻辑）
-│   ├── Sidebar.swift            # 左侧 Liquid Glass 导航
-│   ├── TopBar.swift             # 顶部 toolbar
-│   ├── StandingsView.swift      # 积分榜
-│   ├── FixturesView.swift       # 赛程
-│   ├── TodayView.swift          # 今日页 + 自动刷新调度器
-│   ├── LeadersAndInjuriesViews.swift  # 球员榜（射手/助攻）+ 伤停榜
-│   ├── PlayerNames.swift 等     # 球员/球队中文译名（表在 Resources/*.json，TranslationStore 加载）
-│   └── CommonViews.swift        # 三态视图 / CrestImage / 品牌色
-├── Tests/EPLViewerTests/        # 200+ 项单元测试
-└── EPLViewer.xcodeproj          # Xcode 工程（真源，手工维护，纳入版本管理）
+.                                 # 仓库根 = 项目根
+├── EPLViewer.xcodeproj           # Xcode 工程（真源，手工维护，纳入版本管理）
+├── EPLViewer/                    # 主 target 源码
+│   ├── App/                      # 入口与全局壳：@main / AppState / ContentView / SettingsView / Sidebar / TopBar
+│   ├── Core/                     # 数据层：Models / Networking（ESPN+FPL 客户端）/ Cache / Translators / DataRepository / Support
+│   ├── Features/                 # 板块视图：Today / Fixtures / Standings / LeadersAndInjuries
+│   ├── Localization/             # 译名：TranslationStore + PlayerNames + TeamNames + Resources/*.json
+│   └── Common/                   # CommonViews（三态视图 / CrestImage / 品牌色）+ UIStrings
+├── EPLViewerTests/               # 200+ 项单元测试（按域拆分：Today / Fixtures / Standings / Scheduler / Localization / Guard）
+├── Tools/                        # player_names_editor.py（译名辅助工具）
+├── docs/                         # 设计文档（history/ 内为历史交付快照）
+└── build-app.sh                  # 用 xcodebuild 打 .app Bundle
 ```
 
 ## 维护说明（纯 Xcode 工程）
