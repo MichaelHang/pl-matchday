@@ -4,8 +4,8 @@
 
 ## 功能板块
 
-- **积分榜**：实时排名，升降级区高亮（ESPN）
-- **赛程**：整季赛程一次拉取、缓存 30 天（ESPN）
+- **积分榜**：实时排名，升降级区高亮（ESPN v3，记录缺失时从赛程实时聚合）
+- **赛程**：整季赛程一次拉取（FPL fixtures，ESPN scoreboard 兜底）
 - **球队与球员**：8+ 球队详情，含完整 squad（FPL bootstrap）
 - **射手榜 / 助攻榜**：进球/助攻排行（FPL 派生）
 - **伤停榜**：伤情状态、可出战概率（FPL 派生）
@@ -14,11 +14,11 @@
 
 | 数据 | 来源 | 缓存 TTL |
 |---|---|---|
-| 完整赛程 | ESPN（公开 HTTPS） | **30 天** |
+| 完整赛程 / 比分 | FPL fixtures（ESPN scoreboard 兜底） | 5 分钟（手动刷新绕过） |
 | FPL bootstrap（球队/球员/射手/助攻/伤停） | Fantasy Premier League 公开端点 | 2 小时 |
-| 积分榜 / 当日赛果 | ESPN | 60 秒 / 5 分钟 |
+| 积分榜 / 当日赛果 | ESPN v3 | 各 5 分钟 |
 
-零 API Key、零 Python 依赖。断网自动回退内置示例 JSON（`Sources/EPLViewer/Resources/`）。
+零 API Key、零 Python 依赖。断网自动回退**上次缓存的数据**（stale-if-error，忽略缓存 TTL）；全新安装且从未成功联网时显示空状态，不内置任何假数据。
 
 ---
 
@@ -66,11 +66,11 @@ EPLViewer/
 │   ├── TopBar.swift             # 顶部 toolbar
 │   ├── StandingsView.swift      # 积分榜
 │   ├── FixturesView.swift       # 赛程
-│   ├── TeamsScorersViews.swift  # 球队网格 + 详情 + 射手榜
-│   ├── AssistsAndInjuriesViews.swift  # 助攻榜 + 伤停榜
-│   ├── CommonViews.swift        # 三态视图 / CrestImage / 品牌色
-│   └── Resources/               # 4 个示例 JSON
-├── Tests/EPLViewerTests/        # 17 项单元测试
+│   ├── TodayView.swift          # 今日页 + 自动刷新调度器
+│   ├── LeadersAndInjuriesViews.swift  # 球员榜（射手/助攻）+ 伤停榜
+│   ├── PlayerNames.swift 等     # 球员/球队中文译名（表在 Resources/*.json，TranslationStore 加载）
+│   └── CommonViews.swift        # 三态视图 / CrestImage / 品牌色
+├── Tests/EPLViewerTests/        # 200+ 项单元测试
 └── EPLViewer.xcodeproj          # Xcode 工程（真源，手工维护，纳入版本管理）
 ```
 
@@ -81,6 +81,6 @@ EPLViewer/
 
 ## 已知限制
 
-- **离线模式助攻榜**：从 `scorers.json` 派生（每次运行都重新计算，无缓存）
-- **球队 ID 跨源**：积分榜（ESPN）与球队详情（FPL）用不同 id，跨板块跳转仅按 name 匹配
+- **首次安装且断网**：没有任何本地数据可显示（不内置假样例），联网成功一次后即有缓存兜底
+- **数据 ID 跨源**：积分榜（ESPN）与球员数据（FPL）用不同 id 体系
 - **首次启动延迟**：拉一次 FPL bootstrap（~1MB），之后 2 小时缓存

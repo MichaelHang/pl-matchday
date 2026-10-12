@@ -185,18 +185,6 @@ struct Injury: Decodable, Identifiable {
     let position: String?
 
     var id: String { "\(player.id.map(String.init) ?? player.name)-\(team.id)" }
-
-    /// 中文显示用
-    var statusLabel: String {
-        switch status {
-        case "i": return "伤"
-        case "d": return "存疑"
-        case "u": return "缺阵"
-        case "s": return "停赛"
-        case "n": return "未注册"
-        default:  return status
-        }
-    }
 }
 
 /// 伤停响应
@@ -216,7 +204,7 @@ enum AppError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noData:
-            return "未找到本地示例数据"
+            return "暂无数据"
         case .apiError(let code):
             return "接口返回错误（HTTP \(code)）"
         case .network:
@@ -230,7 +218,10 @@ enum AppError: Error, LocalizedError {
 /// 数据来源
 enum DataSource: String {
     case live   // 来自公开接口（ESPN + FPL）
-    case sample // 来自内置示例 JSON
+    /// 网络失败时回退的「上次成功落盘的缓存」—— 内容真实但可能过期（stale-if-error）
+    case stale
+    /// 占位：完全无数据（如首次安装且从未成功联网）。不再有内置示例文件。
+    case sample
 }
 
 // MARK: - 当前轮推断（网络兜底）

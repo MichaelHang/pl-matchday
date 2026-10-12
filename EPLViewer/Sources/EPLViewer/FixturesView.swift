@@ -74,6 +74,10 @@ final class FixturesViewModel {
     var focusedRound: Int = 1 {
         didSet { alignWindowToFocusedRound() }
     }
+    /// 是否已完成过「首次聚焦当前轮」。
+    /// ⚠️ `load()` 在每次手动刷新 / 比赛日 60s 自动轮询时都会重新执行；
+    /// 聚焦只该发生在**首次拿到数据**时 —— 否则用户正翻看的轮次会被刷新拽回当前轮。
+    @ObservationIgnored private var didFocusInitialRound = false
     /// 真正「当前」轮（来自 FPL is_current/is_next），仅用于初始化和进度文案。
     /// 它参与 `roundSnapshots` 的 past/current/future 判定，所以改值要让快照缓存失效。
     var currentRound: Int = 1 {
@@ -169,16 +173,26 @@ final class FixturesViewModel {
         currentRound = events.flatMap { DataRepository.deriveCurrentRound($0) }
             ?? inferCurrentRoundFromMatches()
             ?? 1
-        // 默认聚焦 currentRound；如该轮暂无数据，回退到首个有数据的轮次。
-        // 走预计算索引 O(1) 判断，不再 O(n) 扫 380 场。
-        if matchesByRound[currentRound] != nil {
-            focusedRound = currentRound
-        } else if let first = availableRounds.first {
-            focusedRound = first
-        } else {
-            focusedRound = currentRound
+        // 只在「首次拿到数据」时聚焦 currentRound（该轮无数据则回退首个有数据的轮次）；
+        // 之后的刷新不动 focusedRound —— 走预计算索引 O(1) 判断，不再 O(n) 扫 380 场。
+        if !didFocusInitialRound, !availableRounds.isEmpty {
+            didFocusInitialRound = true
+            focusedRound = Self.initialFocusRound(
+                currentRound: currentRound,
+                availableRounds: availableRounds,
+                matchesByRound: matchesByRound
+            )
         }
         await loadSeasonProgress(events: events)
+    }
+
+    /// 首次拿到赛程时该聚焦到哪个轮次（纯函数，便于单测）：
+    /// 当前轮有数据 → 当前轮；否则第一个有数据的轮次；全都没有 → 当前轮。
+    static func initialFocusRound(currentRound: Int,
+                                  availableRounds: [Int],
+                                  matchesByRound: [Int: [Match]]) -> Int {
+        if matchesByRound[currentRound] != nil { return currentRound }
+        return availableRounds.first ?? currentRound
     }
 
     /// 从 FPL events 读出赛季进度（已踢轮数 / 总数 / 当前轮 / 年份）。
@@ -518,7 +532,9 @@ struct FixturesView: View {
         }
         .navigationTitle("")
         .task(id: appState.refreshNonce) {
-            appState.isLoading = true
+            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
+            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false

@@ -27,17 +27,20 @@ final class LeadersViewModel {
         // ⚠️ 两组数据都依赖 FPL bootstrap（实测可能慢到几十秒仍不结束），
         // 原本又是串行 await，最坏要等两遍。改成并发取 + 各 15 秒预算：
         // 超时就放弃那组、UI 显示空状态，绝不让页面一直转圈。
-        async let scorersTask: [Scorer]? = withTimeBudget(seconds: 15) {
-            (try? await DataRepository.scorers())?.0
+        async let scorersResult: ([Scorer], DataSource)? = withTimeBudget(seconds: 15) {
+            try? await DataRepository.scorers()
         }
-        async let assistsTask: [Assist]? = withTimeBudget(seconds: 15) {
-            (try? await DataRepository.assists())?.0
+        async let assistsResult: ([Assist], DataSource)? = withTimeBudget(seconds: 15) {
+            try? await DataRepository.assists()
         }
-        let (s, a) = await (scorersTask, assistsTask)
+        let s = await scorersResult
+        let a = await assistsResult
 
-        scorers = s ?? []
-        assists = a ?? []
-        source = (s != nil || a != nil) ? .live : .sample
+        scorers = s?.0 ?? []
+        assists = a?.0 ?? []
+        // 数据来源以仓库返回为准：网络失败回退过期缓存时是 .stale。
+        // 旧实现只看「数组非 nil」就标 .live，把兜底数据误标成了在线。
+        source = (s?.1 == .live || a?.1 == .live) ? .live : .sample
         error = nil
     }
 
@@ -91,7 +94,9 @@ struct LeadersView: View {
         }
         .navigationTitle(UIString.leaders.text(appState.language))
         .task(id: appState.refreshNonce) {
-            appState.isLoading = true
+            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
+            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false
@@ -192,11 +197,12 @@ final class InjuriesViewModel {
     func load() async {
         // ⚠️ 同样依赖 FPL bootstrap：给 15 秒预算，超时就显示空状态，
         // 绝不让页面一直转圈（原因同 LeadersViewModel）。
-        let result = await withTimeBudget(seconds: 15) { () -> [Injury]? in
-            (try? await DataRepository.injuries())?.0
+        let result: ([Injury], DataSource)? = await withTimeBudget(seconds: 15) { () -> ([Injury], DataSource)? in
+            try? await DataRepository.injuries()
         }
-        injuries = result ?? []
-        source = result != nil ? .live : .sample
+        injuries = result?.0 ?? []
+        // 来源以仓库返回为准（见 LeadersViewModel 同款修复：数组非 nil ≠ 在线）
+        source = result?.1 ?? .sample
         error = nil
     }
 }
@@ -256,7 +262,9 @@ struct InjuriesView: View {
         }
         .navigationTitle(UIString.injuries.text(appState.language))
         .task(id: appState.refreshNonce) {
-            appState.isLoading = true
+            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
+            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false

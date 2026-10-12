@@ -112,9 +112,13 @@ actor LogoCache {
 /// 队徽图片：优先从本地缓存读取，未命中再下载并落盘。
 struct CrestImage: View {
     let urlString: String?
+    /// 渲染尺寸（pt）。默认 20（列表行内统一尺寸）；大图场景（推荐比赛卡）显式传更大的值。
+    /// ⚠️ 尺寸必须在这里定：外层再套 `.frame()` 只会把固定大小的子视图居中，放不大。
+    var size: CGFloat = CrestImage.renderedSize
     @State private var image: NSImage?
 
-    /// 统一队徽渲染尺寸（避免某些 NSImage 是竖长比例时被 scaledToFit 撑破外层 frame、把整行 HStack 撑高）
+    /// 列表行内队徽的默认渲染尺寸（避免某些 NSImage 是竖长比例时被 scaledToFit
+    /// 撑破外层 frame、把整行 HStack 撑高）
     static let renderedSize: CGFloat = 20
 
     var body: some View {
@@ -131,8 +135,8 @@ struct CrestImage: View {
             }
         }
         .scaledToFit()
-        .frame(width: Self.renderedSize, height: Self.renderedSize)  // 双保险：建议 + 内部 frame
-        .clipped()  // 强制裁剪：哪怕子 Image 撑破 frame 也只显示 20×20 范围
+        .frame(width: size, height: size)
+        .clipped()  // 强制裁剪：哪怕子 Image 撑破 frame 也只显示 size×size 范围
         .task(id: urlString) {
             guard let urlString else { image = nil; return }
             guard let data = await LogoCache.shared.imageData(for: urlString) else { return }

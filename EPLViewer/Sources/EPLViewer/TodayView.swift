@@ -28,6 +28,10 @@ enum TodayFilter {
     /// 显示侧却还显示「未开赛」就是这里过去的缺口。
     static func isLive(_ m: Match, now: Date = Date()) -> Bool {
         if m.status == "IN_PLAY" || m.status == "HALFTIME" { return true }
+        // 延期 / 取消的比赛没在踢，但原开球时间同样会落进下方时间窗，
+        // 必须显式排除 —— 否则这场比赛在开球时间后 3h 内会被当成「进行中」
+        // （赛果卡显示 ⚽ 0-0，MatchCard 的「延期/取消」分支也永远走不到）。
+        if m.status == "POSTPONED" || m.status == "CANCELED" || m.status == "CANCELLED" { return false }
         guard let kickoff = parseKickoffDate(m.utcDate) else { return false }
         return kickoff <= now
             && now < kickoff.addingTimeInterval(AutoRefreshScheduler.matchWindow)
@@ -89,11 +93,11 @@ enum AutoRefreshScheduler {
 
     /// 从赛程 + `now` 算出调度状态。
     ///
-    /// - `hasLiveMatch`：存在一场 `kickoff <= now < kickoff + matchWindow` 且**未被判为已结束**
-    ///   的比赛。用 `kickoff` 时间窗而非只信 `status`：刚开球时数据源状态可能还没翻
+    /// - `hasLiveMatch`：存在一场 `TodayFilter.isLive` 为真的比赛 —— 状态信号（IN_PLAY / HALFTIME）
+    ///   或「`kickoff <= now < kickoff + matchWindow` 时间窗兜底」，延期 / 取消被显式排除。
+    ///   用时间窗兜底而非只信 `status`：刚开球时数据源状态可能还没翻
     ///   （FPL 开球后约 8 分钟比分仍为 null，本项目有前科）。
-    ///   `isFinished` 复用 `TodayFilter.isFinished` —— 它是纯状态判断（仅 `status == "FINISHED"`，
-    ///   内部不读 `Date()`），可安全复用。
+    ///   判定直接复用 `TodayFilter.isLive`，保证显示侧与调度侧永远同一套口径。
     /// - `nextKickoff`：所有 `kickoff > now` 里最早的那个；都没有则 nil。
     /// - `utcDate` 解析不出来的比赛直接跳过，不崩。
     nonisolated static func schedule(matches: [Match], now: Date) -> RefreshSchedule {
@@ -103,9 +107,10 @@ enum AutoRefreshScheduler {
         for m in matches {
             guard let kickoff = parseKickoffDate(m.utcDate) else { continue }
 
-            // 进行中：落在「开球 → 开球+matchWindow」时间窗内，且未被判为已结束
-            if kickoff <= now, now < kickoff.addingTimeInterval(matchWindow),
-               !TodayFilter.isFinished(m) {
+            // 进行中：口径与 `TodayFilter.isLive` 完全一致（状态优先 + 时间窗兜底）。
+            // 直接复用 isLive 而非重复写窗口条件：延期 / 取消的比赛原开球时间也落窗内，
+            // 若只排除 FINISHED，调度器会把它们当直播，空转 60s 轮询整整 3 小时。
+            if TodayFilter.isLive(m, now: now) {
                 hasLiveMatch = true
             }
 
@@ -409,7 +414,9 @@ struct TodayView: View {
         }
         .navigationTitle(UIString.today.text(lang))
         .task(id: appState.refreshNonce) {
-            appState.isLoading = true
+            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
+            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false
@@ -666,8 +673,8 @@ struct FeaturedMatchCard: View {
 
     private func teamBlock(_ team: Team, lang: AppLanguage, alignment: HorizontalAlignment) -> some View {
         VStack(spacing: 10) {
-            CrestImage(urlString: team.crest)
-                .frame(width: 56, height: 56)
+            // 推荐卡是视觉焦点：队徽按 56pt 渲染（CrestImage 默认 20pt 是给列表行用的）
+            CrestImage(urlString: team.crest, size: 56)
             Text(team.displayName(chinese: lang == .chinese))
                 .font(.title3)
                 .bold()
@@ -762,6 +769,11 @@ struct FeaturedMatchCard: View {
             color = .red
         } else if TodayFilter.isFinished(match) {
             text = UIString.statusFinished.text(lang)
+            color = .white
+        } else if match.status == "POSTPONED"
+                    || match.status == "CANCELED"
+                    || match.status == "CANCELLED" {
+            text = match.status == "POSTPONED" ? UIString.postponed.text(lang) : UIString.canceled.text(lang)
             color = .white
         } else {
             text = UIString.statusUpcoming.text(lang)

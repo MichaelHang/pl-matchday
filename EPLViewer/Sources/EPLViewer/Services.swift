@@ -138,12 +138,18 @@ actor CacheStore {
 
     private let cacheDir: URL
 
-    init() {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        cacheDir = support.appendingPathComponent("EPLViewer/cache", isDirectory: true)
+    /// - Parameter directory: 缓存目录；nil 用默认（App Support/EPLViewer/cache）。
+    ///   测试注入临时目录，避免污染真实缓存。
+    init(directory: URL? = nil) {
+        if let directory {
+            cacheDir = directory
+        } else {
+            let support = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+            cacheDir = support.appendingPathComponent("EPLViewer/cache", isDirectory: true)
+        }
         try? FileManager.default.createDirectory(
             at: cacheDir,
             withIntermediateDirectories: true
@@ -172,6 +178,16 @@ actor CacheStore {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
+    /// 读取缓存，**忽略 TTL**（stale-if-error 兜底）。
+    ///
+    /// 用途：网络失败 / 超时、且 TTL 内缓存也没有时，回退到上次成功落盘的数据 ——
+    /// 内容真实但可能过期，好过空白或假样例。解码失败（文件损坏）返回 nil。
+    func getStale<T: Decodable>(_ key: String) -> T? {
+        let u = url(for: key)
+        guard let data = try? Data(contentsOf: u) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
     /// 写入缓存
     func set<T: Encodable>(_ key: String, value: T) {
         let u = url(for: key)
@@ -196,68 +212,6 @@ actor CacheStore {
     }
 }
 
-// MARK: - 本地示例数据加载（兜底）
-
-/// 从 Bundle.module 读取内置 JSON 并解码（无网络时的兜底）
-/// 双 path 兼容：SwiftPM 编译时资源打到独立 .bundle，Xcode 工程时直接放进 executable bundle。
-enum LocalDataLoader {
-    /// SwiftPM 编译时有独立 resource bundle；Xcode 编译下用 Bundle.main
-    private static var resourceBundle: Bundle {
-        #if SWIFT_PACKAGE
-        return Bundle.module
-        #else
-        return Bundle.main
-        #endif
-    }
-
-    private static func load<T: Decodable>(_ name: String) throws -> T {
-        let bundle = resourceBundle
-        guard let url = bundle.url(forResource: name, withExtension: "json") else {
-            throw AppError.noData
-        }
-        do {
-            let data = try Data(contentsOf: url)
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            throw AppError.noData
-        }
-    }
-
-    static func standings() throws -> [StandingRow] {
-        let r: StandingsResponse = try load("standings")
-        return r.standings.first?.table ?? []
-    }
-
-    static func matches() throws -> [Match] {
-        let r: MatchesResponse = try load("matches")
-        return r.matches
-    }
-
-    static func teams() throws -> [Team] {
-        let r: TeamsResponse = try load("teams")
-        return r.teams
-    }
-
-    static func team(id: Int) throws -> Team? {
-        try teams().first { $0.id == id }
-    }
-
-    static func scorers() throws -> [Scorer] {
-        let r: ScorersResponse = try load("scorers")
-        return r.scorers
-    }
-
-    static func injuries() throws -> [Injury] {
-        // 离线兜底时尝试读 injuries.json，缺失则返回空数组
-        if let r = try? load("injuries") as InjuriesResponse {
-            return r.injuries
-        }
-        return []
-    }
-}
-
 // MARK: - ESPN 公开 API Provider
 
 /// ESPN 公开 API 客户端（无需 API Key）
@@ -274,7 +228,7 @@ struct ESPNProvider {
 
     /// 拉取积分榜（v3 core 多层 $ref，已编平为单层 records/stats）
     /// 注：8-9 月份赛季初 records 字段可能为空数组（积分尚未统计），
-    ///     Repository 层会回退到内置示例 standings.json，UI 上体现为"示例数据"徽标。
+    ///     Repository 层会回退到「从赛程聚合」或「上次落盘的积分榜缓存」。
     func fetchStandings(season: Int) async throws -> ESPNStandingsCoreResponse {
         try await get("\(base)/seasons/\(season)/types/1/groups/23/standings/0?lang=en&region=us")
     }
@@ -296,7 +250,7 @@ struct ESPNProvider {
 
     /// 拉取整赛季赛程。
     /// 当前 v3 core API 没有稳定的 season= 过滤参数；site.api.espn.com 的对应端点已 403/空。
-    /// 此处先尝试 v2 site API（仍可能空），并依赖 DataRepository 的回退逻辑展示本地示例赛程。
+    /// 此处先尝试 v2 site API（仍可能空），并依赖 DataRepository 的回退链（过期缓存 → 空）。
     func fetchSchedule(season: Int) async throws -> ESPNScoreboardResponse {
         let url = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/schedule?season=\(season)"
         return try await get(url)
@@ -566,11 +520,10 @@ struct StandingsAggregator {
             return results
         }
 
-        // 4. 筛选已结束赛事 + 解析 W/D/L/GF/GA
+        // 4. 筛选已结束赛事 + 解析 W/D/L（GF/GA 等比分并发拉完后再统一累加）
         var stats: [Int: RowStat] = [:]   // key = ESPN team.id (Int)
         var teamMeta: [Int: ESPNTeamRefV3] = [:]   // 用于赛后回填 team 详情
-        var pendingScores: [(eventId: String, teamId: Int, kind: String)] = []   // 待 follow 的比分
-        var scores: [String: Int] = [:]   // 比分缓存，key = "eventId-teamId"
+        var finishedPairs: [(eventId: String, homeId: Int, awayId: Int)] = []   // 待补比分的已结束赛事
 
         for detail in details {
             guard let comp = detail.competitions?.first else { continue }
@@ -592,11 +545,8 @@ struct StandingsAggregator {
             if let h = home.team { teamMeta[homeId] = h }
             if let a = away.team { teamMeta[awayId] = a }
 
-            // 拿 score：competitors.score 经常是 $ref，需要 follow
-            // 我们用 winner 字段先粗判：winner=true → 该队得分 > 对方
-            // 但要拿到具体 gf/ga 还得 follow score；这里并发 follow 每场的 home/away score
-            pendingScores.append((eventId: detail.id ?? "", teamId: homeId, kind: "home"))
-            pendingScores.append((eventId: detail.id ?? "", teamId: awayId, kind: "away"))
+            // 拿 score：competitors.score 经常是 $ref，需要 follow —— 记下本场主客，稍后并发拉取
+            finishedPairs.append((eventId: detail.id ?? "", homeId: homeId, awayId: awayId))
 
             // 即时统计：先按 winner 算 W/D/L，GF/GA 后续补
             let homeWin = home.winner == true
@@ -620,20 +570,43 @@ struct StandingsAggregator {
             }
             stats[homeId] = hst
             stats[awayId] = ast
-            // 立即 follow 两队 score，存到 scores 字典（key = eventId-teamId）
-            scores["\(detail.id ?? "")-\(homeId)"] = (try? await ESPNEventsProvider.fetchCompetitorScore(eventId: detail.id ?? "", competitorId: String(homeId))) ?? 0
-            scores["\(detail.id ?? "")-\(awayId)"] = (try? await ESPNEventsProvider.fetchCompetitorScore(eventId: detail.id ?? "", competitorId: String(awayId))) ?? 0
-            // 用真实比分回写 gf/ga（scores 在本场赛事结束时已拿到）
-            if let hg = scores["\(detail.id ?? "")-\(homeId)"],
-               let ag = scores["\(detail.id ?? "")-\(awayId)"] {
-                hst.gf = hg; hst.ga = ag
-                ast.gf = ag; ast.ga = hg
-                stats[homeId] = hst
-                stats[awayId] = ast
+        }
+
+        // 5. 并发 follow 每场已结束赛事双方的比分（score 在 v3 里是 $ref）。
+        //    原实现在主循环里逐场串行 await —— 一轮 10 场要串行发 20 个请求，慢得离谱。
+        var scores: [String: Int] = [:]   // key = "eventId-teamId"
+        await withTaskGroup(of: (String, Int).self) { group in
+            let semaphore = AsyncSemaphore(value: 8)
+            for pair in finishedPairs {
+                for teamId in [pair.homeId, pair.awayId] {
+                    group.addTask {
+                        await semaphore.wait()
+                        defer { Task { await semaphore.signal() } }
+                        let value = (try? await ESPNEventsProvider.fetchCompetitorScore(
+                            eventId: pair.eventId, competitorId: String(teamId))) ?? 0
+                        return ("\(pair.eventId)-\(teamId)", value)
+                    }
+                }
+            }
+            for await (key, value) in group {
+                scores[key] = value
             }
         }
 
-        // 7. follow team 详情拿 name/crest（去重，并发）        // 6. follow team 详情拿 name/crest（去重，并发）
+        // 6. 用真实比分**累加** GF/GA（一支球队打了多场，GF/GA 是总和；
+        //    旧实现在这里用 `=` 覆盖，导致 GF/GA 永远只剩最后一场的数字）
+        for pair in finishedPairs {
+            let hg = scores["\(pair.eventId)-\(pair.homeId)"] ?? 0
+            let ag = scores["\(pair.eventId)-\(pair.awayId)"] ?? 0
+            var hst = stats[pair.homeId] ?? RowStat()
+            var ast = stats[pair.awayId] ?? RowStat()
+            hst.gf += hg; hst.ga += ag
+            ast.gf += ag; ast.ga += hg
+            stats[pair.homeId] = hst
+            stats[pair.awayId] = ast
+        }
+
+        // 7. follow team 详情拿 name/crest（去重，并发）
         let teamIds = Array(teamMeta.keys)
         var resolvedTeams: [Int: ESPNTeamRefV3] = [:]
         await withTaskGroup(of: (Int, ESPNTeamRefV3?).self) { group in
@@ -650,7 +623,7 @@ struct StandingsAggregator {
             }
         }
 
-        // 7. 装配 StandingRow
+        // 8. 装配 StandingRow
         let rows: [StandingRow] = stats.map { (teamId, st) in
             let name = resolvedTeams[teamId]?.displayName ?? resolvedTeams[teamId]?.name ?? "Team #\(teamId)"
             let crest = resolvedTeams[teamId]?.logos?.first?.href
@@ -667,7 +640,13 @@ struct StandingsAggregator {
                 form: nil, status: nil, home: nil, away: nil
             )
         }
-        let sorted = rows.sorted { ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor) }
+        // 完全同分同净胜球同进球时按 teamId 稳定排序 —— stats 是字典、遍历顺序不定，
+        // 不加最终 tiebreak 的话，两次渲染的行序可能不同
+        let sorted = rows.sorted {
+            ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
+                || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
+                    && $0.team.id < $1.team.id
+        }
         return sorted.enumerated().map { (idx, r) in
             StandingRow(position: idx + 1, team: r.team,
                        playedGames: r.playedGames, won: r.won, draw: r.draw, lost: r.lost,
@@ -709,7 +688,13 @@ struct StandingsAggregator {
                 goalDifference: st.gd(), form: nil, status: nil, home: nil, away: nil
             )
         }
-        let sorted = rows.sorted { ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor) }
+        // 完全同分同净胜球同进球时按 teamId 稳定排序 —— stats 是字典、遍历顺序不定，
+        // 不加最终 tiebreak 的话，两次渲染的行序可能不同
+        let sorted = rows.sorted {
+            ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
+                || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
+                    && $0.team.id < $1.team.id
+        }
         return sorted.enumerated().map { (idx, r) in
             StandingRow(position: idx + 1, team: r.team,
                        playedGames: r.playedGames, won: r.won, draw: r.draw, lost: r.lost,
@@ -790,7 +775,7 @@ struct StandingsEnricher {
 
     /// 把外部数据源给的 form 归一成紧凑的 "WWDLW"。
     ///
-    /// 各数据源写法不统一（本地示例是 "W,W,D,L,W"、部分源带空格或无 D），
+    /// 各数据源写法不统一（有的带分隔符 "W,W,D,L,W"、有的带空格或无 D），
     /// 而 UI 按「前 5 个字符」渲染 —— 不归一会把分隔符当成场次画进胶囊，
     /// 视觉上就像"状态没有更新"。只保留 W/D/L，去掉其它字符后取最近 5 场。
     static func normalizeForm(_ raw: String?) -> String? {
@@ -1196,7 +1181,13 @@ enum ESPNTranslator {
         return resp.standings.enumerated().map { (idx, entry) in
             translateV3Entry(idx: idx, entry: entry)
         }
-        .sorted { $0.points > $1.points }
+        // 积分 → 净胜球 → 进球 降序；完全同分时按 ESPN rank 稳定住顺序 ——
+        // 否则两次取数之间同分行可能互换，列表顺序与显示的名次对不上。
+        .sorted {
+            ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
+                || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
+                    && $0.position < $1.position
+        }
     }
 
     /// v2 entries 翻译（沿用原逻辑）
@@ -1233,14 +1224,32 @@ enum ESPNTranslator {
                 form: nil, status: nil, home: nil, away: nil
             )
         }
-        return rows.sorted { $0.points > $1.points }
+        return rows.sorted {
+            ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
+                || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
+                    && $0.position < $1.position
+        }
+    }
+
+    /// 稳定的字符串 → 正整数散列（FNV-1a 64bit，对 Int.max 取模）。
+    ///
+    /// Swift 的 `String.hashValue` 带随机种子，**每次进程启动都不同** —— 用它派生实体 id，
+    /// 同一球队/比赛两次启动 id 就会变，缓存比对、SwiftUI ForEach diff 全部错乱。
+    /// ESPN 的 id / $ref URL 字符串本身是稳定的，用 FNV 散列得到跨启动一致的替代 id。
+    static func stableID(from string: String) -> Int {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return Int(hash % UInt64(Int.max))
     }
 
     /// 单条 v3 entry → StandingRow
     private static func translateV3Entry(idx: Int, entry: ESPNStandingEntryV3) -> StandingRow {
         let teamRef = entry.team
         let team = Team(
-            id: Int(teamRef.id ?? "") ?? abs(teamRef.dollarRef?.hashValue ?? idx),
+            id: Int(teamRef.id ?? "") ?? teamRef.dollarRef.map(Self.stableID(from:)) ?? idx,
             name: teamRef.displayName ?? teamRef.name ?? "Unknown",
             shortName: teamRef.abbreviation ?? teamRef.shortName,
             crest: teamRef.logos?.first?.href,
@@ -1317,7 +1326,7 @@ enum ESPNTranslator {
                 return Score(fullTime: FullTime(home: Int(hs), away: Int(as_)))
             }()
             return Match(
-                id: Int(event.id) ?? abs(event.id.hashValue % 1_000_000),
+                id: Int(event.id) ?? Self.stableID(from: event.id) % 1_000_000,
                 matchday: event.week?.number,
                 utcDate: event.date,
                 status: status,
@@ -1377,14 +1386,15 @@ enum ESPNTranslator {
 
 // MARK: - 数据仓库（统一入口 + 回退 + 缓存）
 
-/// 统一的数据获取入口，负责「公开 API / 本地示例」的回退决策与缓存
+/// 统一的数据获取入口，负责「公开 API / 过期缓存（stale-if-error）」的回退决策与缓存。
+/// 网络失败时回退上次成功落盘的数据；无任何缓存（如首启即断网）返回空，UI 显示空状态。
 enum DataRepository {
     // 缓存 key 前缀
     private static let kBootstrap = "fpl_bootstrap"
     private static let kStandings = "espn_standings"
 
-    /// 是否应降级到本地示例数据
-    /// - 降级：429（限频）/ 网络失败 / 无本地数据
+    /// 是否应降级到下一级兜底（空数据 / 过期缓存）
+    /// - 降级：429（限频）/ 网络失败 / 无数据
     /// - 上抛：403 / 400 等其它 HTTP 错误、解析错误
     static func shouldFallback(_ err: AppError) -> Bool {
         switch err {
@@ -1395,12 +1405,13 @@ enum DataRepository {
         }
     }
 
-    // MARK: 积分榜：三级 fallback（v3 records → 已结束赛事聚合 → 本地示例）
+    // MARK: 积分榜：fallback（v3 records → 已结束赛事聚合 → 过期缓存 → 空）
 
-    /// 三级 fallback 策略：
+    /// fallback 策略：
     ///   1. v3 standings records 字段（ESPN 自带的官方积分榜，等赛后由 ESPN 自己填充）
-    ///   2. **本项目核心**：从 v3 events 拉过去 14 天已结束赛事实时聚合积分（不依赖 ESPN records）
-    ///   3. 网络失败 / 真没比赛时，回退到内置 standings.json 示例数据
+    ///   2. **本项目核心**：从赛程（FPL fixtures）已结束赛事实时聚合积分（不依赖 ESPN records）
+    ///   3. 网络失败时回退磁盘上的过期缓存（stale-if-error：赛程聚合若不可用，用上次落盘的 v3 榜）
+    ///   4. 彻底无数据 → 空数组（UI 显示「暂无数据」）
     ///
     /// 用户痛点：英超第一轮已经踢完，但 v3 standings 的 records 字段可能真空很久未更新；
     ///          因此 2 级 fallback 是必需的实时兜底，**不依赖 ESPN 自己攒 records**。
@@ -1420,23 +1431,30 @@ enum DataRepository {
             // v3 失败，跳到下一级
         }
 
-        // 2. 复用赛程（FPL fixtures / scoreboard）已结束赛事实时聚合积分（核心：不等 ESPN records）
+        // 2. 复用赛程（FPL fixtures / scoreboard）已结束赛事实时聚合积分（核心：不等 ESPN records）。
+        //    赛程本身是过期缓存时也能聚合 —— 内容真实，只是不新鲜，来源标 .stale。
         let (ms, src) = await DataRepository.matches()
-        if src == .live {
+        if src != .sample {
             let rows = StandingsAggregator.aggregate(matches: ms)
-            if !rows.isEmpty { return (rows, .live) }
+            if !rows.isEmpty { return (rows, src) }
         }
 
-        // 3. 本地示例数据兜底
-        return ((try? LocalDataLoader.standings()) ?? [], .sample)
+        // 3. 过期的 v3 官方榜缓存（stale-if-error）
+        if let stale: ESPNStandingsCoreResponse = await CacheStore.shared.getStale(kStandings) {
+            let rows = ESPNTranslator.standingRows(from: stale)
+            if !rows.isEmpty { return (rows, .stale) }
+        }
+
+        // 4. 彻底无数据
+        return ([], .sample)
     }
 
-    // MARK: 赛程（FPL fixtures 为主，自带轮次/比分/队徽；ESPN scoreboard 兜底；本地示例最后）
+    // MARK: 赛程（FPL fixtures 为主，ESPN scoreboard 兜底；网络失败回退过期缓存）
     /// FPL fixtures 端点直接给出每场比赛的轮次（event）、真实比分、参赛队；
     /// 参赛队映射到 FPL bootstrap teams（自带官方队徽 URL），是最稳的赛程来源。
-    /// 缓存 TTL 与赛程长缓存同（30 天），命中后秒开。
+    /// TTL 内缓存命中后秒开；网络失败时回退上次落盘的赛程（忽略 TTL）。
     static func matches() async -> ([Match], DataSource) {
-        let cacheKey = "fpl_fixtures_\(SeasonStore.currentSeason)"
+        let cacheKey = fixturesCacheKey
         // 1) 内存（同一生命周期内最快路径，切 tab 秒开）
         if let mem = await MemoryStore.shared.cachedFixtures(), !mem.isEmpty {
             return (mem, .live)
@@ -1446,20 +1464,24 @@ enum DataRepository {
             await MemoryStore.shared.cacheFixtures(cached)
             return (cached, .live)
         }
-        // 3) 网络取数（FPL → ESPN 兜底），整体 20 秒预算：
-        //    超时直接落本地示例，绝不让 UI 无限等。
+        // 3) 网络取数（FPL → ESPN 兜底），整体 20 秒预算：超时不无限等。
         if let ms = await withTimeBudget(seconds: 20, operation: { await fetchMatchesFromNetwork() }) {
             await CacheStore.shared.set(cacheKey, value: ms)
             await MemoryStore.shared.cacheFixtures(ms)
             return (ms, .live)
         }
-        // 4) 本地示例
-        return ((try? LocalDataLoader.matches()) ?? [], .sample)
+        // 4) 网络失败/超时 → 上次成功落盘的赛程（忽略 TTL，stale-if-error）。
+        //    刻意**不**写入 MemoryStore：内存缓存只放新鲜数据，避免 stale 被后续路径当成 live。
+        if let stale: [Match] = await CacheStore.shared.getStale(cacheKey), !stale.isEmpty {
+            return (stale, .stale)
+        }
+        // 5) 彻底无数据（如首次安装且断网）→ 空数组，UI 显示「暂无赛程」
+        return ([], .sample)
     }
 
     /// 网络取赛程：FPL fixtures 为主，ESPN scoreboard 兜底。任一级成功即返回。
     /// 抽出来是为了能被 `withTimeBudget` 整体包住 —— 否则两级各 30 秒超时，
-    /// 最坏情况要等 60 秒才落到本地示例。
+    /// 最坏情况要等 60 秒才能确定「两级都失败」再走过期缓存兜底。
     private static func fetchMatchesFromNetwork() async -> [Match]? {
         if let ms = try? await loadFPLMatches() { return ms }
         if let ms = try? await loadScoreboardMatches() { return ms }
@@ -1467,10 +1489,10 @@ enum DataRepository {
     }
 
     private static func loadFPLMatches() async throws -> [Match] {
-        async let bootstrap = loadOrFetchBootstrap()
+        async let bootstrapResult = loadOrFetchBootstrap()
         async let fixtures = FPLProvider().fetchFixtures()
-        let (bs, fx) = try await (bootstrap, fixtures)
-        let ms = FPLTranslator.matches(from: fx, teams: bs.teams)
+        let (bs, fx) = try await (bootstrapResult, fixtures)
+        let ms = FPLTranslator.matches(from: fx, teams: bs.bootstrap.teams)
         guard !ms.isEmpty else { throw AppError.noData }
         return ms
     }
@@ -1506,7 +1528,7 @@ enum DataRepository {
     /// 供「赛季总览」用 —— 比 currentGameweek 更重，但只调一次（走内存缓存后几乎零成本）。
     static func gameweeks() async -> [FPLGameweek]? {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
+            let (bootstrap, _) = try await loadOrFetchBootstrap()
             return bootstrap.events ?? []
         } catch {
             return nil
@@ -1517,11 +1539,11 @@ enum DataRepository {
 
     static func teams() async throws -> ([Team], DataSource) {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
-            return (FPLTranslator.teams(from: bootstrap), .live)
+            let (bootstrap, source) = try await loadOrFetchBootstrap()
+            return (FPLTranslator.teams(from: bootstrap), source)
         } catch {
             if let appErr = error as? AppError, shouldFallback(appErr) {
-                return ((try? LocalDataLoader.teams()) ?? [], .sample)
+                return ([], .sample)
             }
             throw error
         }
@@ -1529,11 +1551,11 @@ enum DataRepository {
 
     static func team(id: Int) async throws -> (Team?, DataSource) {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
-            return (FPLTranslator.team(id: id, from: bootstrap), .live)
+            let (bootstrap, source) = try await loadOrFetchBootstrap()
+            return (FPLTranslator.team(id: id, from: bootstrap), source)
         } catch {
             if let appErr = error as? AppError, shouldFallback(appErr) {
-                return (try? LocalDataLoader.team(id: id), .sample)
+                return (nil, .sample)
             }
             throw error
         }
@@ -1543,11 +1565,11 @@ enum DataRepository {
 
     static func scorers() async throws -> ([Scorer], DataSource) {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
-            return (FPLTranslator.scorers(from: bootstrap, limit: 10), .live)
+            let (bootstrap, source) = try await loadOrFetchBootstrap()
+            return (FPLTranslator.scorers(from: bootstrap, limit: 10), source)
         } catch {
             if let appErr = error as? AppError, shouldFallback(appErr) {
-                return ((try? LocalDataLoader.scorers()) ?? [], .sample)
+                return ([], .sample)
             }
             throw error
         }
@@ -1555,13 +1577,11 @@ enum DataRepository {
 
     static func assists() async throws -> ([Assist], DataSource) {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
-            return (FPLTranslator.assists(from: bootstrap, limit: 10), .live)
+            let (bootstrap, source) = try await loadOrFetchBootstrap()
+            return (FPLTranslator.assists(from: bootstrap, limit: 10), source)
         } catch {
             if let appErr = error as? AppError, shouldFallback(appErr) {
-                // 离线兜底：从 scorers.json 派生助攻榜
-                let local = (try? LocalDataLoader.scorers()) ?? []
-                return (local.map { Assist(from: $0) }, .sample)
+                return ([], .sample)
             }
             throw error
         }
@@ -1569,31 +1589,40 @@ enum DataRepository {
 
     static func injuries() async throws -> ([Injury], DataSource) {
         do {
-            let bootstrap = try await loadOrFetchBootstrap()
-            return (FPLTranslator.injuries(from: bootstrap), .live)
+            let (bootstrap, source) = try await loadOrFetchBootstrap()
+            return (FPLTranslator.injuries(from: bootstrap), source)
         } catch {
             if let appErr = error as? AppError, shouldFallback(appErr) {
-                return ((try? LocalDataLoader.injuries()) ?? [], .sample)
+                return ([], .sample)
             }
             throw error
         }
     }
 
-    // MARK: 内部：bootstrap 加载（带缓存）
+    // MARK: 内部：bootstrap 加载（带缓存 + stale 兜底）
 
-    private static func loadOrFetchBootstrap() async throws -> FPLBootstrap {
+    /// 返回 `(bootstrap, 来源)`。网络失败时回退磁盘上的过期缓存（stale-if-error），
+    /// 上层派生端点（球队 / 射手 / 助攻 / 伤停 / 轮次）因此无需各自写兜底。
+    private static func loadOrFetchBootstrap() async throws -> (bootstrap: FPLBootstrap, source: DataSource) {
         // 1) 内存：同一生命周期内直接命中，零 IO 零解码
-        if let mem = await MemoryStore.shared.cachedBootstrap() { return mem }
+        if let mem = await MemoryStore.shared.cachedBootstrap() { return (mem, .live) }
         // 2) 磁盘缓存（TTL 内）
         if let cached: FPLBootstrap = await CacheStore.shared.get(kBootstrap, ttl: CacheTTL.bootstrap) {
             await MemoryStore.shared.cacheBootstrap(cached)
-            return cached
+            return (cached, .live)
         }
-        // 3) 网络
-        let resp = try await FPLProvider().fetchBootstrap()
-        await CacheStore.shared.set(kBootstrap, value: resp)
-        await MemoryStore.shared.cacheBootstrap(resp)
-        return resp
+        // 3) 网络；失败时回退过期缓存，仍拿不到才上抛
+        do {
+            let resp = try await FPLProvider().fetchBootstrap()
+            await CacheStore.shared.set(kBootstrap, value: resp)
+            await MemoryStore.shared.cacheBootstrap(resp)
+            return (resp, .live)
+        } catch {
+            if let stale: FPLBootstrap = await CacheStore.shared.getStale(kBootstrap) {
+                return (stale, .stale)
+            }
+            throw error
+        }
     }
 
     // MARK: 主动操作

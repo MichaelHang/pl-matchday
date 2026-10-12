@@ -77,8 +77,8 @@ extension UIString {
     static let cache         = UIString(zh: "缓存", en: "Cache")
     static let clearCache    = UIString(zh: "清空本地缓存", en: "Clear Local Cache")
     static let dataSourceDesc = UIString(
-        zh: "数据来源：ESPN 公开接口（积分榜/赛程/赛果）+ FPL 公开接口（球员/射手/助攻/伤停）。无需 API Key，离线时自动回退内置示例。",
-        en: "Data source: ESPN public API (standings / fixtures / results) + FPL public API (players / scorers / assists / injuries). No API Key required; falls back to built-in samples offline."
+        zh: "数据来源：ESPN 公开接口（积分榜/赛程/赛果）+ FPL 公开接口（球员/射手/助攻/伤停）。无需 API Key；断网时自动回退上次缓存的数据，无缓存则显示空状态。",
+        en: "Data source: ESPN public API (standings / fixtures / results) + FPL public API (players / scorers / assists / injuries). No API Key required; offline falls back to the last cached data, or an empty state if no cache exists."
     )
 
     // 积分榜表头
@@ -103,8 +103,6 @@ extension UIString {
     static let standingsDash       = UIString(zh: "—",     en: "—")
 
     // 赛程
-    static let round          = UIString(zh: "轮次", en: "Round")
-    static let allRounds      = UIString(zh: "全部轮次", en: "All Rounds")
     static let roundN         = UIString(zh: "第 %d 轮", en: "Round %d")
     static let noFixtures     = UIString(zh: "暂无赛程", en: "No fixtures")
     static let noRoundMatches = UIString(zh: "该轮次暂无比赛", en: "No matches in this round")
@@ -118,10 +116,6 @@ extension UIString {
     // 赛程页（按截图布局：第 N 轮 · 赛程 大标题 + 日期范围副标题 + 本轮/赛季总览 模式 + 轮次 chip）
     /// 大标题「第 32 轮 · 赛程」（%d 为轮次号）
     static let fixturesHeader       = UIString(zh: "第 %d 轮 · 赛程", en: "Matchday %d · Fixtures")
-    /// 副标题「8月29日 – 9月1日 · 共 10 场」（%@ 为起始日期、%@ 为结束日期、%d 为场次）
-    static let fixturesRangeFormat  = UIString(zh: "%@ – %@ · 共 %d 场", en: "%@ – %@ · %d matches")
-    /// 副标题：单日的情况（同一日多场比赛）
-    static let fixturesRangeSame    = UIString(zh: "%@ · 共 %d 场", en: "%@ · %d matches")
     /// 模式切换：本轮
     static let modeThisRound        = UIString(zh: "本轮", en: "This Round")
     /// 模式切换：赛季总览
@@ -134,8 +128,6 @@ extension UIString {
     static let nextRoundsPage       = UIString(zh: "下一组轮次", en: "Next rounds")
     /// 「主队赛事」右上角小标识
     static let homeBadge            = UIString(zh: "主", en: "H")
-    /// 日期分组标题「8月29日 星期六」
-    static let weekdayZh            = ["", "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
 
     // 赛季总览页
     /// 「2026 赛季」标题（%d 为开赛年份）
@@ -144,12 +136,8 @@ extension UIString {
     static let seasonPreviewVs     = UIString(zh: "VS", en: "VS")
 
     // 今日
-    static let todayNoMatches = UIString(zh: "今日无比赛", en: "No matches today")
-    static let nextMatch      = UIString(zh: "下一场", en: "Next Match")
     static let statusUpcoming = UIString(zh: "未开赛", en: "Upcoming")
     static let statusFinished = UIString(zh: "已结束", en: "Finished")
-    /// 今日比赛总数（带 %d 参数）
-    static let todayCount     = UIString(zh: "共 %d 场", en: "%d matches")
     /// 大标题「今日 · 8月31日」（%@ 为日期）
     static let todayTitleFormat = UIString(zh: "今日 · %@", en: "Today · %@")
     /// 副标题「第 2 轮 · 共 10 场 · 0 场进行中」（三个 %d 依次为 轮次 / 今日场次 / 进行中）
@@ -206,25 +194,8 @@ extension UIString {
     static let debugPlayerNamesUnsaved       = UIString(zh: "有未保存的修改", en: "Unsaved changes")
     /// 未选球队时的占位提示
     static let debugPlayerNamesSelectTeam    = UIString(zh: "从左侧选择一支球队查看球员", en: "Select a team to view its players")
-    /// 覆盖数读数标签
-    static let debugPlayerNamesCoverageLabel = UIString(zh: "覆盖层", en: "Overrides")
-    /// 覆盖数读数（含 %d 占位符，由视图用 String(format:) 填入数字）
-    static let debugPlayerNamesCoverage      = UIString(zh: "当前覆盖数：%d", en: "Active overrides: %d")
-    /// 搜索框占位符
-    static let debugPlayerNamesSearch        = UIString(zh: "搜索球员（web_name / 全名）", en: "Search players (web_name / full name)")
-    /// 球队筛选标签
-    static let debugPlayerNamesTeam          = UIString(zh: "球队", en: "Team")
-    /// 球队筛选「全部」选项
-    static let debugPlayerNamesAllTeams      = UIString(zh: "全部", en: "All")
-    /// bootstrap 尚未拉取时的提示
-    static let debugPlayerNamesFetchNote     = UIString(
-        zh: "尚未拉取球员数据，请先让 App 联网获取一次（重启或点设置里的「立即刷新」）。",
-        en: "Roster not loaded yet. Let the app fetch once (restart or tap Refresh in Settings)."
-    )
     /// 覆盖徽标
     static let debugPlayerNamesOverrideBadge = UIString(zh: "覆盖", en: "Override")
     /// 保存按钮
     static let debugPlayerNamesSave          = UIString(zh: "保存", en: "Save")
-    /// 重置按钮
-    static let debugPlayerNamesReset         = UIString(zh: "重置", en: "Reset")
 }

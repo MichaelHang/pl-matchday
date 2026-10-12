@@ -134,6 +134,9 @@ final class AppState {
     /// 保留 bootstrap / 积分榜等其它缓存，避免每 60s 重下整份 FPL bootstrap。
     /// UI 实时性不变（比分只来自赛程），但每 60s 网络开销从 3 份降到 1 份。
     func refresh(scoresOnly: Bool = false) async {
+        // 记录本次 nonce 自增的来源：视图在 .task(id:) 开始时读取一次，
+        // 后台轮询静默刷新（不亮遮罩），手动刷新照常遮罩。都在主 actor 上，无竞态。
+        lastRefreshSource = scoresOnly ? .background : .manual
         if scoresOnly {
             await DataRepository.invalidateFixtures()
         } else {
@@ -141,6 +144,14 @@ final class AppState {
         }
         refreshNonce &+= 1
     }
+
+    /// 刷新来源：决定各视图这次 reload 要不要亮全屏加载遮罩。
+    /// - initial: 冷启动 / 首次进入某板块（nonce 未变）→ 照常遮罩；
+    /// - manual: 用户点刷新 / 清缓存 → 照常遮罩（有明确的等待预期）；
+    /// - background: 比赛日 60s 自动轮询（scoresOnly）→ **静默**刷新，
+    ///   比分原地更新即可 —— 否则每 60s 全屏遮罩闪一次，非常干扰。
+    enum RefreshSource { case initial, manual, background }
+    @ObservationIgnored private(set) var lastRefreshSource: RefreshSource = .initial
 
     /// 重建自动刷新定时器。间隔由 `AutoRefreshScheduler.refreshInterval(...)` 决定：
     /// - 全局 `autoRefresh == true` → 固定 60s；

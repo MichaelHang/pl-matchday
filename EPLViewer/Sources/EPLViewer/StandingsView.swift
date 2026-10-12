@@ -31,9 +31,9 @@ final class StandingsViewModel {
 
     @MainActor
     func load() async {
-        // ⚠️ standings 内部有三级 fallback（ESPN 直连 → 从赛程聚合 → 本地示例），
+        // ⚠️ standings 内部有多级 fallback（ESPN 直连 → 从赛程聚合 → 过期缓存），
         // 每级在慢网络上都可能耗掉大量时间，最坏情况能拖到一分钟。
-        // 这里给整体加 25 秒预算：超时直接用本地示例渲染，绝不让 UI 无限等待。
+        // 这里给整体加 25 秒预算：超时显示空状态，绝不让 UI 无限等待。
         let result = await withTimeBudget(seconds: 25) { () -> ([StandingRow], DataSource)? in
             try? await DataRepository.standings()
         }
@@ -43,8 +43,8 @@ final class StandingsViewModel {
             base = data
             src = s
         } else {
-            // 超预算或数据彻底拿不到 → 落本地示例，不抛错、不转圈
-            base = (try? LocalDataLoader.standings()) ?? []
+            // 超预算 → 空数据（不抛错、不转圈；内部 stale 兜底失败才会走到这里）
+            base = []
             src = .sample
         }
 
@@ -134,7 +134,9 @@ struct StandingsView: View {
         .navigationTitle(String(format: UIString.appTitle.text(lang),
                                 SeasonStore.seasonLabel))
         .task(id: appState.refreshNonce) {
-            appState.isLoading = true
+            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
+            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false

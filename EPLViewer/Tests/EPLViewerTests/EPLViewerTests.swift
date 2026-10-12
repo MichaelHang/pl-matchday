@@ -192,6 +192,42 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertFalse(CacheTTL.isValid(mtime: now, ttl: 0, now: now))
     }
 
+    /// 回归：CacheStore.getStale —— 网络失败时的 stale-if-error 兜底。
+    /// 忽略 TTL 返回上次落盘的数据；TTL 常规路径仍然尊重过期时间；坏文件返回 nil 不抛错。
+    func testCacheStoreStaleFallback() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epl-cachestore-\(UUID().uuidString)", isDirectory: true)
+        let store = CacheStore(directory: dir)
+        struct Payload: Codable, Equatable { let value: Int }
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        await store.set("k", value: Payload(value: 7))
+        // 探测落盘是否真的成功（部分沙箱环境磁盘 IO 被拦截，此时本用例无从验证，跳过）
+        guard (try? Data(contentsOf: dir.appendingPathComponent("k.json"))) != nil else {
+            throw XCTSkip("此环境下 CacheStore 无法写盘，跳过 stale 兜底验证")
+        }
+
+        // 把 mtime 拨回 2 小时前 → 常规 TTL 路径（ttl=60s）不应命中
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-2 * 3600)],
+            ofItemAtPath: dir.appendingPathComponent("k.json").path)
+        let fresh: Payload? = await store.get("k", ttl: 60)
+        XCTAssertNil(fresh, "TTL 过期后常规路径不应命中")
+
+        // getStale 忽略 TTL，返回上次数据
+        let stale: Payload? = await store.getStale("k")
+        XCTAssertEqual(stale, Payload(value: 7), "getStale 应忽略 TTL 返回过期缓存")
+
+        // 文件损坏 → 返回 nil，不抛错
+        try Data("not json".utf8).write(to: dir.appendingPathComponent("k.json"))
+        let broken: Payload? = await store.getStale("k")
+        XCTAssertNil(broken, "损坏的缓存文件应静默返回 nil")
+
+        // key 不存在 → nil
+        let missing: Payload? = await store.getStale("nope")
+        XCTAssertNil(missing)
+    }
+
     // MARK: - 内部模型解码（保留）
 
     /// 复用 App 的 snake_case 解码配置（用于内部 domain 模型）
@@ -252,7 +288,6 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(response.injuries.count, 2)
         XCTAssertEqual(response.injuries.first?.status, "i")
         XCTAssertEqual(response.injuries.first?.chanceOfPlayingNextRound, 25)
-        XCTAssertEqual(response.injuries.first?.statusLabel, "伤")
     }
 
     // MARK: - 排序逻辑（射手榜/助攻榜）
@@ -1394,6 +1429,44 @@ final class EPLViewerTests: XCTestCase {
         }
     }
 
+    // MARK: - 首次聚焦轮次（load() 仅在首次拿数据时聚焦；刷新不得重置浏览位置）
+
+    /// 把 makeRounds 的结果按轮次分桶（matchesByRound 的形状）
+    private func roundsByRound(_ count: Int) -> (byRound: [Int: [Match]], rounds: [Int]) {
+        var byRound: [Int: [Match]] = [:]
+        for m in makeRounds(count) { byRound[m.matchday ?? 0, default: []].append(m) }
+        return (byRound, Array(1...count))
+    }
+
+    /// 当前轮有数据 → 聚焦当前轮
+    func testInitialFocusRoundPrefersCurrentRound() {
+        let (byRound, rounds) = roundsByRound(10)
+        XCTAssertEqual(
+            FixturesViewModel.initialFocusRound(currentRound: 7,
+                                                availableRounds: rounds,
+                                                matchesByRound: byRound),
+            7, "当前轮有数据 → 聚焦当前轮")
+    }
+
+    /// 当前轮暂无赛程（如 FPL 已推进到下一轮但赛程未发）→ 回退第一个有数据的轮次
+    func testInitialFocusRoundFallsBackToFirstAvailableRound() {
+        let (byRound, rounds) = roundsByRound(10)
+        XCTAssertEqual(
+            FixturesViewModel.initialFocusRound(currentRound: 11,
+                                                availableRounds: rounds,
+                                                matchesByRound: byRound),
+            1, "当前轮无数据 → 聚焦首个有数据的轮次")
+    }
+
+    /// 完全没有赛程 → 维持传入的 currentRound（load() 侧此时根本不会调用本函数）
+    func testInitialFocusRoundWithNoDataKeepsCurrentRound() {
+        XCTAssertEqual(
+            FixturesViewModel.initialFocusRound(currentRound: 5,
+                                                availableRounds: [],
+                                                matchesByRound: [:]),
+            5, "无任何轮次数据 → 维持当前轮")
+    }
+
     /// 聚焦中间轮 → 窗口以它为**中心**（前 2 后 2）
     func testRoundWindowCentersOnFocusedRound() {
         let vm = FixturesViewModel()
@@ -2372,7 +2445,8 @@ final class EPLViewerTests: XCTestCase {
                       "球队块额外留白应保持 40")
 
         let card = try XCTUnwrap(qaSlice(code, from: "struct FeaturedMatchCard: View {"))
-        XCTAssertTrue(card.contains(".frame(width: 56, height: 56)"), "队徽应保持 56×56")
+        XCTAssertTrue(card.contains("CrestImage(urlString: team.crest, size: 56)"),
+                      "队徽应按 56×56 渲染（CrestImage.size，外层 .frame 放不大固定尺寸的子视图）")
         XCTAssertTrue(card.contains(".system(size: 44, weight: .bold, design: .rounded)"),
                       "比分字号应保持 44")
         XCTAssertTrue(card.contains(".padding(22)"), "卡片内边距应保持 22")
@@ -3004,6 +3078,18 @@ final class EPLViewerTests: XCTestCase {
                                kickoff: "2026-09-12T13:55:00Z", status: "SCHEDULED")
         XCTAssertTrue(AutoRefreshScheduler.schedule(matches: [m], now: now).hasLiveMatch,
                       "刚开球、状态未翻 → 用时间窗判定为进行中")
+    }
+
+    /// 回归：延期 / 取消的比赛即使原开球时间落进时间窗，也不得触发 60s 直播轮询
+    /// （否则一场延期的比赛会让调度器空转轮询整整 3 小时）。
+    func testScheduleIgnoresPostponedAndCanceledMatches() throws {
+        let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
+        let postponed = makeMatchTeams(id: 1, home: 1, away: 2,
+                                       kickoff: "2026-09-12T13:55:00Z", status: "POSTPONED")
+        let canceled = makeMatchTeams(id: 2, home: 3, away: 4,
+                                      kickoff: "2026-09-12T13:55:00Z", status: "CANCELED")
+        let s = AutoRefreshScheduler.schedule(matches: [postponed, canceled], now: now)
+        XCTAssertFalse(s.hasLiveMatch, "延期 / 取消不算比赛进行中")
     }
 
     /// 已结束且已超出 3h 时间窗 → 非进行中。
@@ -3792,6 +3878,24 @@ extension EPLViewerTests {
                        "已结束优先于时间窗，不应判为进行中")
     }
 
+    /// 回归：延期 / 取消的比赛虽未结束，但原开球时间同样落进 3h 时间窗 ——
+    /// 不得被时间窗兜底判成「进行中」（否则赛果卡显示 ⚽ 0-0，而非「延期 / 取消」）。
+    func testIsLiveExcludesPostponedAndCanceledEvenInWindow() throws {
+        let kickoffStr = "2026-09-19T14:00:00Z"
+        let now = try XCTUnwrap(parseKickoffDate(kickoffStr)).addingTimeInterval(30 * 60)
+
+        XCTAssertFalse(TodayFilter.isLive(ccMatch(kickoff: kickoffStr, status: "POSTPONED"), now: now),
+                       "开球窗内的 POSTPONED 不应判为进行中")
+        XCTAssertFalse(TodayFilter.isLive(ccMatch(kickoff: kickoffStr, status: "CANCELED"), now: now),
+                       "开球窗内的 CANCELED 不应判为进行中")
+        XCTAssertFalse(TodayFilter.isLive(ccMatch(kickoff: kickoffStr, status: "CANCELLED"), now: now),
+                       "开球窗内的 CANCELLED 不应判为进行中")
+
+        // 同一时刻、同一开球时间的 SCHEDULED 仍按窗内进行中处理（防止把兜底逻辑改死）
+        XCTAssertTrue(TodayFilter.isLive(ccMatch(kickoff: kickoffStr, status: "SCHEDULED"), now: now),
+                      "状态滞后的正常比赛仍应按时间窗判为进行中")
+    }
+
     /// 分区回归：开球窗内的 SCHEDULED 比赛应进入「进行中」分组，而非「未开赛」分组
     /// （今日页 / 赛程页 header 计数与分栏的对齐依据）。
     func testGroupedScheduledInWindowCountedAsLiveNotUpcoming() throws {
@@ -3833,6 +3937,98 @@ extension EPLViewerTests {
         let positions = TodayViewModel.buildPositions(from: [first, second])
         XCTAssertEqual(positions.count, 1, "重复 teamId 只应产出一条记录")
         XCTAssertEqual(positions[1], 3, "重复 key 应保留先出现的名次")
+    }
+
+    // MARK: - 稳定 ID 与积分榜排序确定性
+
+    /// 回归：stableID 必须跨启动稳定 —— 旧实现用 `String.hashValue`（每次启动随机种子），
+    /// 派生出的球队/比赛 id 两次启动不一致，缓存比对与 ForEach diff 全乱。
+    /// 基准值用独立实现算好的 FNV-1a 64bit 锁死算法。
+    func testStableIDIsDeterministicFNV1a() {
+        XCTAssertEqual(ESPNTranslator.stableID(from: "abc"), 7_430_836_138_530_658_124)
+        XCTAssertEqual(
+            ESPNTranslator.stableID(from: "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/teams/359"),
+            6_167_624_713_123_287_027)
+        // 同输入恒同输出；结果必须是非负 Int（可安全用作 id）
+        XCTAssertEqual(ESPNTranslator.stableID(from: "abc"), ESPNTranslator.stableID(from: "abc"))
+        XCTAssertGreaterThanOrEqual(ESPNTranslator.stableID(from: "x"), 0, "结果必须是非负 Int")
+        XCTAssertNotEqual(ESPNTranslator.stableID(from: "a"), ESPNTranslator.stableID(from: "b"))
+    }
+
+    /// 回归：v3 积分榜同分时按 净胜球 → 进球 → ESPN rank 稳定排序。
+    /// 旧实现只按积分排，同分行两次取数间可能互换，列表顺序与显示名次对不上。
+    func testStandingsV3RowsSortTiebreaksByGDThenRank() throws {
+        func entry(id: String, rank: Int, pts: Int, gf: Int, ga: Int) -> ESPNStandingEntryV3 {
+            func rec(_ name: String, _ v: Int) -> ESPNRecordV3 {
+                ESPNRecordV3(name: name, displayName: nil, shortDisplayName: nil,
+                             value: Double(v), stats: nil)
+            }
+            return ESPNStandingEntryV3(
+                team: ESPNTeamRefV3(id: id, name: id, shortName: nil, displayName: "Team \(id)",
+                                    logos: nil, abbreviation: nil, dollarRef: nil),
+                records: [rec("points", pts), rec("pointsFor", gf), rec("pointsAgainst", ga)],
+                stats: nil, rank: rank, note: nil)
+        }
+        let resp = ESPNStandingsCoreResponse(
+            name: nil, displayName: nil,
+            standings: [
+                entry(id: "5", rank: 1, pts: 3, gf: 1, ga: 1),   // 同分、GD 0
+                entry(id: "6", rank: 2, pts: 3, gf: 2, ga: 0),   // 同分、GD +2 → 应排最前
+                entry(id: "7", rank: 3, pts: 3, gf: 1, ga: 2),   // 同分、GD -1 → 垫底
+                entry(id: "8", rank: 4, pts: 3, gf: 1, ga: 1),   // 与 team5 完全同分 → 按 rank 排在 team5 后
+            ])
+        let rows = ESPNTranslator.standingRows(from: resp)
+        XCTAssertFalse(rows.isEmpty, "有 records 的响应不应回退为空")
+        XCTAssertEqual(rows.map(\.team.id), [6, 5, 8, 7],
+                       "同分先比净胜球、再比进球，完全同分按 ESPN rank 稳定住")
+        XCTAssertEqual(rows.map(\.position), [2, 1, 4, 3],
+                       "position 沿用 ESPN rank，排序不应改写名次标签")
+    }
+
+    /// 回归：v3 team 只有 $ref（无数字 id）时，id 用 FNV 散列派生 —— 跨启动一致。
+    func testStandingsV3RefOnlyTeamGetsStableID() throws {
+        let ref = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/teams/359"
+        let resp = ESPNStandingsCoreResponse(
+            name: nil, displayName: nil,
+            standings: [
+                ESPNStandingEntryV3(
+                    team: ESPNTeamRefV3(id: nil, name: nil, shortName: nil, displayName: nil,
+                                        logos: nil, abbreviation: nil, dollarRef: ref),
+                    records: [ESPNRecordV3(name: "points", displayName: nil, shortDisplayName: nil,
+                                           value: 3, stats: nil)],
+                    stats: nil, rank: 1, note: nil)
+            ])
+        let rows = ESPNTranslator.standingRows(from: resp)
+        XCTAssertFalse(rows.isEmpty, "有 records 的响应不应回退为空")
+        XCTAssertEqual(rows.first?.team.id, ESPNTranslator.stableID(from: ref),
+                       "无数字 id 的 $ref 球队应得到跨启动稳定的 id")
+    }
+
+    /// 回归：从赛果聚合积分榜时，积分/净胜球/进球完全相同的球队按 teamId 稳定排序 ——
+    /// stats 是字典、遍历顺序不定，没有最终 tiebreak 时两次聚合的行序可能不同。
+    func testAggregateMatchesFullTieOrdersByTeamId() {
+        func finishedMatch(id: Int, home: Int, away: Int, homeScore: Int, awayScore: Int) -> Match {
+            let h = Team(id: home, name: "T\(home)", shortName: nil, crest: nil,
+                         venue: nil, founded: nil, coach: nil, squad: nil)
+            let a = Team(id: away, name: "T\(away)", shortName: nil, crest: nil,
+                         venue: nil, founded: nil, coach: nil, squad: nil)
+            return Match(id: id, matchday: 1, utcDate: "2026-08-15T14:00:00Z", status: "FINISHED",
+                         stage: nil, homeTeam: h, awayTeam: a,
+                         score: Score(fullTime: FullTime(home: homeScore, away: awayScore)))
+        }
+        // 两队各 1-0 取胜：积分/净胜球/进球完全相同
+        let matches = [
+            finishedMatch(id: 1, home: 30, away: 40, homeScore: 1, awayScore: 0),   // team 30 胜
+            finishedMatch(id: 2, home: 20, away: 50, homeScore: 1, awayScore: 0),   // team 20 胜
+        ]
+        let rows = StandingsAggregator.aggregate(matches: matches)
+        XCTAssertEqual(rows.map(\.team.id), [20, 30, 40, 50],
+                       "完全同分的胜者按 teamId 升序，零分球队同样按 teamId 升序")
+        XCTAssertEqual(rows.map(\.position), [1, 2, 3, 4])
+        XCTAssertEqual(rows[0].points, 3)
+        XCTAssertEqual(rows[1].points, 3)
+        XCTAssertEqual(rows[0].goalsFor, 1)
+        XCTAssertEqual(rows[1].goalsFor, 1)
     }
 
     // MARK: - 积分榜排序（主场/客场榜按维度独立排名）
@@ -4085,6 +4281,29 @@ extension EPLViewerTests {
         XCTAssertFalse(missing.contains("Rice"))
         XCTAssertEqual(missing, ["Another New Guy", "Some New Guy"],
                        "missing 应排序去重，且不含已知项")
+    }
+
+    /// 回归：译名表已外部化为 bundle 资源（`Resources/PlayerNames-zh-Hans.json`），
+    /// 加载器必须能在 App bundle 里找到并解码 —— 上面各 displayName 测试若全绿但本用例红，
+    /// 说明资源文件没被打进 target（pbxproj 引用丢失）。
+    func testTranslationResourcesAreBundledAndLoadable() {
+        // byId 维度（资源文件的主键表；1 与 411 是表内锚点值）
+        XCTAssertEqual(PlayerNameMap.builtInName(forId: 1), "戴维·拉亚")
+        XCTAssertEqual(PlayerNameMap.builtInName(forId: 411), "埃尔林·哈兰德")
+        // 表必须是真实加载的完整表，而不是加载失败后的空表兜底：1..20 全命中
+        XCTAssertEqual(PlayerNameMap.missing(ids: Array(1...20)), [],
+                       "id 1..20 应全部在译名表中（资源未加载时这里会全量 missing）")
+        // 球队表
+        let arsenal = Team(id: 57, name: "Arsenal", shortName: "ARS", crest: nil,
+                           venue: nil, founded: nil, coach: nil, squad: nil)
+        XCTAssertEqual(TeamNameMap.zh(for: arsenal), "阿森纳")
+    }
+
+    /// 加载器健壮性：locale 不存在（或文件损坏）→ nil，由调用方回退空表显示英文。
+    func testTranslationStoreMissingLocaleReturnsNil() {
+        struct Payload: Decodable {}
+        XCTAssertNil(TranslationStore.load("PlayerNames", locale: "xx-Nope") as Payload?,
+                     "不存在的 locale 资源应返回 nil，而不是抛错或崩溃")
     }
 
     // MARK: - 调试期球员中文名覆盖层（PlayerNameOverrides）

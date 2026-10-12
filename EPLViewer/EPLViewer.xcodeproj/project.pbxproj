@@ -7,14 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		027B5C17D53FA74189E1405D /* scorers.json in Resources */ = {isa = PBXBuildFile; fileRef = D86A28D0C602C99BC683E77F /* scorers.json */; };
 		08FF2C80D2640D98AE9BCD71 /* StandingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76453380B5757C381C7C3A4C /* StandingsView.swift */; };
 		0983A04A3A1326A1AD2A8169 /* PlayerNameOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B2A9DC6728D18F6D3EBBE73 /* PlayerNameOverrides.swift */; };
 		1175FDCE4C1360B1F7653FB8 /* PlayerNameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA3DB4B8E39B638976FB5E0 /* PlayerNameManager.swift */; };
-		11AE4AD1259200073E688AD7 /* standings.json in Resources */ = {isa = PBXBuildFile; fileRef = D3294CFCB1608F938F1854E1 /* standings.json */; };
 		1D456420F2D895E8548E03B7 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15E542D7622667B6C97F6E89 /* Models.swift */; };
 		2E4B4FADBD38DAB57DC2837F /* TeamNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57504297F1981C95E10F30E5 /* TeamNames.swift */; };
-		2E5E37D811893845F6064474 /* matches.json in Resources */ = {isa = PBXBuildFile; fileRef = EB79D4687986BE2F16E63F3D /* matches.json */; };
 		2F17153C7B40A3056DC9765A /* TopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD67A4258B11BABCFF1D35E6 /* TopBar.swift */; };
 		3418DFCE19AC35A61779C9E1 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */; };
 		441F92ABF37B80DFAF483F52 /* EPLViewerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D14B636B2DA6890E83CF35B /* EPLViewerApp.swift */; };
@@ -22,13 +19,14 @@
 		7037E4495E5CE53BCDDFF545 /* LeadersAndInjuriesViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3B23115414516A550FF6D2 /* LeadersAndInjuriesViews.swift */; };
 		7740A4C3225DB68D84D12937 /* FixturesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 139C38AD58A17156EC65A479 /* FixturesView.swift */; };
 		84BEF90F73528F0EE94E77DD /* PlayerNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26FBFC5878AFAC88A152EC83 /* PlayerNames.swift */; };
-		8BF0D70EF12CD2C1A2E70761 /* injuries.json in Resources */ = {isa = PBXBuildFile; fileRef = 12D1CA8609C07D3B59E9A28F /* injuries.json */; };
 		90A6ACFCA7BAB60B9BF975AA /* EPLViewerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2271258EBEC2CE84298BA007 /* EPLViewerTests.swift */; };
 		9D962840F37E6D6B97752FFF /* CommonViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450552BD5F1C302078E1B082 /* CommonViews.swift */; };
 		BB530E098E4FA6454B6AE6E9 /* UIStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */; };
 		C4258A9BEA11227C3F48B39E /* Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E496DC28C14142C15CE7980E /* Sidebar.swift */; };
 		CBF60F39F7202C9E7E87EFF0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4674FDC1DC3BA39E687A625B /* Assets.xcassets */; };
-		FDD7B5BC36E668995FA1E463 /* teams.json in Resources */ = {isa = PBXBuildFile; fileRef = 103C549C71A6D4B85B2167C8 /* teams.json */; };
+		E2B1D5F3C8A74B0F9D41627C /* TranslationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A0C4E2B7F64A9E8C30516B /* TranslationStore.swift */; };
+		A4D3F7B5E0C96D2B1F63849E /* PlayerNames-zh-Hans.json in Resources */ = {isa = PBXBuildFile; fileRef = F3C2E6A4D9B85C1A0E52738D /* PlayerNames-zh-Hans.json */; };
+		C6F5B9D7A2EB8F4D3B850610 /* TeamNames-zh-Hans.json in Resources */ = {isa = PBXBuildFile; fileRef = B5E4A8C6F1DA7E3C2A74950F /* TeamNames-zh-Hans.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,8 +41,6 @@
 
 /* Begin PBXFileReference section */
 		0AA3DB4B8E39B638976FB5E0 /* PlayerNameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerNameManager.swift; sourceTree = "<group>"; };
-		103C549C71A6D4B85B2167C8 /* teams.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = teams.json; sourceTree = "<group>"; };
-		12D1CA8609C07D3B59E9A28F /* injuries.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = injuries.json; sourceTree = "<group>"; };
 		139C38AD58A17156EC65A479 /* FixturesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixturesView.swift; sourceTree = "<group>"; };
 		15E542D7622667B6C97F6E89 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		2271258EBEC2CE84298BA007 /* EPLViewerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPLViewerTests.swift; sourceTree = "<group>"; };
@@ -60,12 +56,12 @@
 		90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIStrings.swift; sourceTree = "<group>"; };
 		A8D19644DA34A882A38BC165 /* EPLViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EPLViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
-		D3294CFCB1608F938F1854E1 /* standings.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = standings.json; sourceTree = "<group>"; };
-		D86A28D0C602C99BC683E77F /* scorers.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = scorers.json; sourceTree = "<group>"; };
 		E496DC28C14142C15CE7980E /* Sidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sidebar.swift; sourceTree = "<group>"; };
-		EB79D4687986BE2F16E63F3D /* matches.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = matches.json; sourceTree = "<group>"; };
 		F51E9E7966298B718AC7D1D5 /* EPLViewerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EPLViewerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD67A4258B11BABCFF1D35E6 /* TopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBar.swift; sourceTree = "<group>"; };
+		D1A0C4E2B7F64A9E8C30516B /* TranslationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationStore.swift; sourceTree = "<group>"; };
+		F3C2E6A4D9B85C1A0E52738D /* PlayerNames-zh-Hans.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "PlayerNames-zh-Hans.json"; sourceTree = "<group>"; };
+		B5E4A8C6F1DA7E3C2A74950F /* TeamNames-zh-Hans.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "TeamNames-zh-Hans.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -85,6 +81,7 @@
 				E496DC28C14142C15CE7980E /* Sidebar.swift */,
 				76453380B5757C381C7C3A4C /* StandingsView.swift */,
 				57504297F1981C95E10F30E5 /* TeamNames.swift */,
+				D1A0C4E2B7F64A9E8C30516B /* TranslationStore.swift */,
 				B9D4D41ED3CAACACC16D13F4 /* TodayView.swift */,
 				FD67A4258B11BABCFF1D35E6 /* TopBar.swift */,
 				90CE2E6146B5C5DAD6831A63 /* UIStrings.swift */,
@@ -122,11 +119,8 @@
 		A9D082F08F6CE332EC905699 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				12D1CA8609C07D3B59E9A28F /* injuries.json */,
-				EB79D4687986BE2F16E63F3D /* matches.json */,
-				D86A28D0C602C99BC683E77F /* scorers.json */,
-				D3294CFCB1608F938F1854E1 /* standings.json */,
-				103C549C71A6D4B85B2167C8 /* teams.json */,
+				F3C2E6A4D9B85C1A0E52738D /* PlayerNames-zh-Hans.json */,
+				B5E4A8C6F1DA7E3C2A74950F /* TeamNames-zh-Hans.json */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -229,11 +223,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				CBF60F39F7202C9E7E87EFF0 /* Assets.xcassets in Resources */,
-				8BF0D70EF12CD2C1A2E70761 /* injuries.json in Resources */,
-				2E5E37D811893845F6064474 /* matches.json in Resources */,
-				027B5C17D53FA74189E1405D /* scorers.json in Resources */,
-				11AE4AD1259200073E688AD7 /* standings.json in Resources */,
-				FDD7B5BC36E668995FA1E463 /* teams.json in Resources */,
+				A4D3F7B5E0C96D2B1F63849E /* PlayerNames-zh-Hans.json in Resources */,
+				C6F5B9D7A2EB8F4D3B850610 /* TeamNames-zh-Hans.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -256,6 +247,7 @@
 				C4258A9BEA11227C3F48B39E /* Sidebar.swift in Sources */,
 				08FF2C80D2640D98AE9BCD71 /* StandingsView.swift in Sources */,
 				2E4B4FADBD38DAB57DC2837F /* TeamNames.swift in Sources */,
+				E2B1D5F3C8A74B0F9D41627C /* TranslationStore.swift in Sources */,
 				3418DFCE19AC35A61779C9E1 /* TodayView.swift in Sources */,
 				2F17153C7B40A3056DC9765A /* TopBar.swift in Sources */,
 				BB530E098E4FA6454B6AE6E9 /* UIStrings.swift in Sources */,
@@ -324,11 +316,14 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_NSPrincipalClass = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.eplviewer.appTests";
+				PRODUCT_MODULE_NAME = EPLViewerTests;
 				SDKROOT = macosx;
 				SWIFT_ENABLE_BATCH_MODE = NO;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPLViewer.app/Contents/MacOS/EPLViewer";
@@ -340,11 +335,14 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_KEY_NSPrincipalClass = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.eplviewer.appTests";
+				PRODUCT_MODULE_NAME = EPLViewerTests;
 				SDKROOT = macosx;
 				SWIFT_ENABLE_BATCH_MODE = NO;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EPLViewer.app/Contents/MacOS/EPLViewer";
