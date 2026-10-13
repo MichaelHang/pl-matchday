@@ -1,17 +1,17 @@
 import XCTest
 @testable import EPLViewer
 
-// 积分榜:聚合 / 排序 / enrichment
-// 从 EPLViewerTests.swift 按域拆出;方法仍挂在同一个 EPLViewerTests 类上。
+// Standings: aggregation / sorting / enrichment.
+// Split from EPLViewerTests.swift by domain; methods still live on the same class.
 
 extension EPLViewerTests {
-    /// 造一支球队（id/name 自由指定）
+    /// Build a team (free-form id/name).
     func makeTeam2(_ id: Int, _ name: String) -> Team {
         Team(id: id, name: name, shortName: name, crest: nil,
              venue: nil, founded: nil, coach: nil, squad: nil)
     }
 
-    /// 造一场含主客两队 + 全场比分的已结束比赛
+    /// Build a finished match with both teams and a full-time score.
     func makeFinishedMatch(id: Int, kickoff: String,
                                        home: Team, away: Team,
                                        homeGoals: Int, awayGoals: Int) -> Match {
@@ -20,25 +20,25 @@ extension EPLViewerTests {
               score: Score(fullTime: FullTime(home: homeGoals, away: awayGoals)))
     }
 
-    /// 造一场已结束但没比分的（应被聚合器忽略）
+    /// Build a finished match without a score (the aggregator should ignore it).
     func makeUnscoredMatch(id: Int, kickoff: String,
                                        home: Team, away: Team) -> Match {
         Match(id: id, matchday: 1, utcDate: kickoff, status: "FINISHED",
               stage: nil, homeTeam: home, awayTeam: away, score: nil)
     }
 
-    /// venueStats 主场：team 100 主场比赛 3 场（2 胜 1 平 0 负，进 5 失 2，积 7 分）
+    /// venueStats home: team 100 hosts 3 matches (2W 1D 0L, GF 5 GA 2, 7 pts).
     func testVenueStatsHomeCountsCorrectly() {
         let a = makeTeam2(100, "Alpha")
         let b = makeTeam2(200, "Beta")
         let c = makeTeam2(300, "Charlie")
         let matches = [
             makeFinishedMatch(id: 1, kickoff: "2026-08-22T12:00:00Z",
-                              home: a, away: b, homeGoals: 3, awayGoals: 1),  // 胜
+                              home: a, away: b, homeGoals: 3, awayGoals: 1),  // win
             makeFinishedMatch(id: 2, kickoff: "2026-08-25T12:00:00Z",
-                              home: a, away: c, homeGoals: 1, awayGoals: 1),  // 平
+                              home: a, away: c, homeGoals: 1, awayGoals: 1),  // draw
             makeFinishedMatch(id: 3, kickoff: "2026-08-29T12:00:00Z",
-                              home: a, away: b, homeGoals: 1, awayGoals: 0),  // 胜
+                              home: a, away: b, homeGoals: 1, awayGoals: 0),  // win
         ]
         let s = try! XCTUnwrap(StandingsEnricher.venueStats(for: 100, matches: matches, isHome: true))
         XCTAssertEqual(s.played, 3)
@@ -50,17 +50,17 @@ extension EPLViewerTests {
         XCTAssertEqual(s.points, 7)
     }
 
-    /// venueStats 客场：team 100 客场比赛 2 场（1 胜 1 负，进 3 失 3，积 3 分）
-    /// 验证「从客队视角」统计能正确翻转主客。
+    /// venueStats away: team 100 travels twice (1W 1L, GF 3 GA 3, 3 pts). Verifies
+    /// the home/away flip when counting from the away team's perspective.
     func testVenueStatsAwayFlipsHomeAway() {
         let a = makeTeam2(100, "Alpha")
         let b = makeTeam2(200, "Beta")
         let c = makeTeam2(300, "Charlie")
         let matches = [
-            // 客胜：Alpha 是 away 队，away 进球 2 > home 1
+            // Away win: Alpha is the away team, away goals 2 > home 1
             makeFinishedMatch(id: 1, kickoff: "2026-08-22T12:00:00Z",
                               home: b, away: a, homeGoals: 1, awayGoals: 2),
-            // 客负：Alpha 是 away 队，away 进球 1 < home 2
+            // Away loss: Alpha is the away team, away goals 1 < home 2
             makeFinishedMatch(id: 2, kickoff: "2026-08-25T12:00:00Z",
                               home: c, away: a, homeGoals: 2, awayGoals: 1),
         ]
@@ -74,49 +74,50 @@ extension EPLViewerTests {
         XCTAssertEqual(s.points, 3)
     }
 
-    /// venueStats：没比赛或没比分 → nil（区分"无数据"和"踢了但全输"）
+    /// venueStats: no matches or no scores → nil (distinguishing "no data" from
+    /// "played but lost everything").
     func testVenueStatsNoMatchesReturnsNil() {
         let a = makeTeam2(100, "Alpha")
         XCTAssertNil(StandingsEnricher.venueStats(for: 100, matches: [], isHome: true),
-                     "空 matches → nil")
-        // SCHEDULED 的比赛应该被忽略
+                     "empty matches → nil")
+        // SCHEDULED matches should be ignored
         let scheduled = Match(id: 9, matchday: 1, utcDate: "2026-08-22T12:00:00Z",
                               status: "SCHEDULED", stage: nil, homeTeam: a, awayTeam: a, score: nil)
         XCTAssertNil(StandingsEnricher.venueStats(for: 100, matches: [scheduled], isHome: true),
-                     "未开赛的不应计入")
+                     "matches that haven't kicked off must not count")
     }
 
-    /// formString：team 100 最近 5 场按时间顺序 → "WWDLW"
+    /// formString: team 100's last 5 in chronological order → "WWDLW".
     func testFormStringReturnsMostRecentFiveChronological() {
         let a = makeTeam2(100, "Alpha")
         let b = makeTeam2(200, "Beta")
-        // 5 场：W W D L W（按时间从早到晚）—— Alpha 有时主有时客
+        // 5 matches: W W D L W (oldest → newest) — Alpha home and away mixed
         let matches = [
             makeFinishedMatch(id: 1, kickoff: "2026-08-01T12:00:00Z",
-                              home: a, away: b, homeGoals: 2, awayGoals: 0),  // W（主）
+                              home: a, away: b, homeGoals: 2, awayGoals: 0),  // W (home)
             makeFinishedMatch(id: 2, kickoff: "2026-08-08T12:00:00Z",
-                              home: b, away: a, homeGoals: 0, awayGoals: 1),  // W（客）
+                              home: b, away: a, homeGoals: 0, awayGoals: 1),  // W (away)
             makeFinishedMatch(id: 3, kickoff: "2026-08-15T12:00:00Z",
-                              home: a, away: b, homeGoals: 1, awayGoals: 1),  // D（主）
+                              home: a, away: b, homeGoals: 1, awayGoals: 1),  // D (home)
             makeFinishedMatch(id: 4, kickoff: "2026-08-22T12:00:00Z",
-                              home: b, away: a, homeGoals: 3, awayGoals: 0),  // L（客）
+                              home: b, away: a, homeGoals: 3, awayGoals: 0),  // L (away)
             makeFinishedMatch(id: 5, kickoff: "2026-08-29T12:00:00Z",
-                              home: a, away: b, homeGoals: 4, awayGoals: 2),  // W（主）
-            // 第 6 场：比第 5 场更早，但假定 6 场只取最近 5，应被丢弃
+                              home: a, away: b, homeGoals: 4, awayGoals: 2),  // W (home)
+            // A 6th match, older than #5: with only the last 5 kept it must be dropped
             makeFinishedMatch(id: 0, kickoff: "2026-07-25T12:00:00Z",
-                              home: a, away: b, homeGoals: 5, awayGoals: 0),  // 应被丢弃
+                              home: a, away: b, homeGoals: 5, awayGoals: 0),  // should be dropped
         ]
         XCTAssertEqual(StandingsEnricher.formString(for: 100, matches: matches, last: 5),
                        "WWDLW")
     }
 
-    /// formString：没有任何比赛 → nil
+    /// formString: no matches at all → nil.
     func testFormStringNoMatchesReturnsNil() {
         let s = StandingsEnricher.formString(for: 100, matches: [], last: 5)
         XCTAssertNil(s)
     }
 
-    /// enrich：rows 的 home/away 是 nil → 本地补全
+    /// enrich: rows with nil home/away → filled locally.
     func testEnrichFillsNilHomeAwayFromLocalAggregate() {
         let a = makeTeam2(100, "Alpha")
         let b = makeTeam2(200, "Beta")
@@ -132,13 +133,13 @@ extension EPLViewerTests {
                               home: a, away: b, homeGoals: 2, awayGoals: 0),
         ]
         let enriched = StandingsEnricher.enrich(rows: [row], with: matches)
-        XCTAssertNotNil(enriched[0].home, "主场应被补全")
+        XCTAssertNotNil(enriched[0].home, "home record should be filled")
         XCTAssertEqual(enriched[0].home?.played, 1)
         XCTAssertEqual(enriched[0].home?.points, 3)
-        XCTAssertNil(enriched[0].away, "客场无比赛仍为 nil")
+        XCTAssertNil(enriched[0].away, "no away matches → away stays nil")
     }
 
-    /// enrich：rows 已有 home/away → 不覆盖（保留权威值）
+    /// enrich: rows with existing home/away → not overwritten (authoritative values kept).
     func testEnrichPreservesExistingHomeAway() {
         let a = makeTeam2(100, "Alpha")
         let b = makeTeam2(200, "Beta")
@@ -157,12 +158,12 @@ extension EPLViewerTests {
         ]
         let enriched = StandingsEnricher.enrich(rows: [row], with: matches)
         XCTAssertEqual(enriched[0].home?.played, 99,
-                       "原有 home 不应被本地聚合覆盖")
+                       "the existing home record must not be overwritten by local aggregation")
         XCTAssertNil(enriched[0].away,
-                     "无客场比赛时 away 应为 nil（不是全 0 VenueStats）")
+                     "with no away matches, away should stay nil (not an all-zero VenueStats)")
     }
 
-    /// enrich：空 rows / 空 matches 都安全
+    /// enrich: empty rows / empty matches are both safe.
     func testEnrichSafeOnEmptyInputs() {
         let a = makeTeam2(100, "Alpha")
         let row = StandingRow(
@@ -177,7 +178,7 @@ extension EPLViewerTests {
         XCTAssertNil(StandingsEnricher.enrich(rows: [row], with: []).first?.home)
     }
 
-    /// StandingRow.with：只补 home/away 时，其它字段全部沿用
+    /// StandingRow.with: filling home/away only; every other field carried over.
     func testStandingRowWithPreservesOtherFields() {
         let a = makeTeam2(100, "Alpha")
         let row = StandingRow(
@@ -190,7 +191,7 @@ extension EPLViewerTests {
         let newHome = VenueStats(played: 1, won: 1, draw: 0, lost: 0,
                                  goalsFor: 2, goalsAgainst: 0, points: 3)
         let updated = row.with(home: newHome)
-        XCTAssertEqual(updated.position, 5, "其它字段不能丢")
+        XCTAssertEqual(updated.position, 5, "no other field may be lost")
         XCTAssertEqual(updated.points, 7)
         XCTAssertEqual(updated.form, "WDW")
         XCTAssertEqual(updated.status, "CHAMPIONS_LEAGUE")
@@ -200,11 +201,11 @@ extension EPLViewerTests {
 }
 
 extension EPLViewerTests {
-    // MARK: - 积分榜名次聚合（teamId 去重）
+    // MARK: - Standings position aggregation (teamId dedup)
 
-    /// 回归测试：积分榜聚合时若同一 teamId 出现两次（脏数据 / 主客场拆分残留），
-    /// 旧的 `Dictionary(uniqueKeysWithValues:)` 会直接 trap（fatalError）；
-    /// 改用 `uniquingKeysWith:` 后不再崩溃，且保留**先出现**的那条名次。
+    /// Regression: if the same teamId appears twice in standings (dirty data / stale
+    /// home-away split), the old `Dictionary(uniqueKeysWithValues:)` trapped
+    /// (fatalError); `uniquingKeysWith:` doesn't crash and keeps the **first** rank.
     func testBuildPositionsKeepsFirstOnDuplicateTeamId() throws {
         let team = Team(
             id: 1, name: "Arsenal", shortName: "ARS",
@@ -221,30 +222,33 @@ extension EPLViewerTests {
             form: nil, status: nil, home: nil, away: nil
         )
 
-        // 不应 trap；重复的 teamId 保留先出现的名次（3）。
+        // No trap; the duplicate teamId keeps the first-seen rank (3).
         let positions = TodayViewModel.buildPositions(from: [first, second])
-        XCTAssertEqual(positions.count, 1, "重复 teamId 只应产出一条记录")
-        XCTAssertEqual(positions[1], 3, "重复 key 应保留先出现的名次")
+        XCTAssertEqual(positions.count, 1, "a duplicate teamId yields one entry")
+        XCTAssertEqual(positions[1], 3, "duplicate keys keep the first-seen rank")
     }
 
-    // MARK: - 稳定 ID 与积分榜排序确定性
+    // MARK: - Stable IDs & standings sort determinism
 
-    /// 回归：stableID 必须跨启动稳定 —— 旧实现用 `String.hashValue`（每次启动随机种子），
-    /// 派生出的球队/比赛 id 两次启动不一致，缓存比对与 ForEach diff 全乱。
-    /// 基准值用独立实现算好的 FNV-1a 64bit 锁死算法。
+    /// Regression: stableID must be stable across launches — the old code used
+    /// `String.hashValue` (randomly seeded per launch), so derived team/match ids
+    /// differed between launches, breaking cache comparisons and ForEach diffing.
+    /// Reference values pin the FNV-1a 64-bit algorithm via an independent
+    /// implementation.
     func testStableIDIsDeterministicFNV1a() {
         XCTAssertEqual(ESPNTranslator.stableID(from: "abc"), 7_430_836_138_530_658_124)
         XCTAssertEqual(
             ESPNTranslator.stableID(from: "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/teams/359"),
             6_167_624_713_123_287_027)
-        // 同输入恒同输出；结果必须是非负 Int（可安全用作 id）
+        // Same input, same output; the result must be a non-negative Int (safe as an id)
         XCTAssertEqual(ESPNTranslator.stableID(from: "abc"), ESPNTranslator.stableID(from: "abc"))
-        XCTAssertGreaterThanOrEqual(ESPNTranslator.stableID(from: "x"), 0, "结果必须是非负 Int")
+        XCTAssertGreaterThanOrEqual(ESPNTranslator.stableID(from: "x"), 0, "the result must be a non-negative Int")
         XCTAssertNotEqual(ESPNTranslator.stableID(from: "a"), ESPNTranslator.stableID(from: "b"))
     }
 
-    /// 回归：v3 积分榜同分时按 净胜球 → 进球 → ESPN rank 稳定排序。
-    /// 旧实现只按积分排，同分行两次取数间可能互换，列表顺序与显示名次对不上。
+    /// Regression: the v3 standings tie-break is points → GD → GF → ESPN rank.
+    /// Sorting by points alone let tied rows swap between fetches, desyncing the
+    /// list order from the displayed positions.
     func testStandingsV3RowsSortTiebreaksByGDThenRank() throws {
         func entry(id: String, rank: Int, pts: Int, gf: Int, ga: Int) -> ESPNStandingEntryV3 {
             func rec(_ name: String, _ v: Int) -> ESPNRecordV3 {
@@ -260,20 +264,21 @@ extension EPLViewerTests {
         let resp = ESPNStandingsCoreResponse(
             name: nil, displayName: nil,
             standings: [
-                entry(id: "5", rank: 1, pts: 3, gf: 1, ga: 1),   // 同分、GD 0
-                entry(id: "6", rank: 2, pts: 3, gf: 2, ga: 0),   // 同分、GD +2 → 应排最前
-                entry(id: "7", rank: 3, pts: 3, gf: 1, ga: 2),   // 同分、GD -1 → 垫底
-                entry(id: "8", rank: 4, pts: 3, gf: 1, ga: 1),   // 与 team5 完全同分 → 按 rank 排在 team5 后
+                entry(id: "5", rank: 1, pts: 3, gf: 1, ga: 1),   // tied, GD 0
+                entry(id: "6", rank: 2, pts: 3, gf: 2, ga: 0),   // tied, GD +2 → first
+                entry(id: "7", rank: 3, pts: 3, gf: 1, ga: 2),   // tied, GD -1 → last
+                entry(id: "8", rank: 4, pts: 3, gf: 1, ga: 1),   // fully tied with team5 → after it by rank
             ])
         let rows = ESPNTranslator.standingRows(from: resp)
-        XCTAssertFalse(rows.isEmpty, "有 records 的响应不应回退为空")
+        XCTAssertFalse(rows.isEmpty, "a response with records must not fall back to empty")
         XCTAssertEqual(rows.map(\.team.id), [6, 5, 8, 7],
-                       "同分先比净胜球、再比进球，完全同分按 ESPN rank 稳定住")
+                       "ties break by GD, then goals; fully tied rows pin by ESPN rank")
         XCTAssertEqual(rows.map(\.position), [2, 1, 4, 3],
-                       "position 沿用 ESPN rank，排序不应改写名次标签")
+                       "position keeps the ESPN rank; sorting must not rewrite the position labels")
     }
 
-    /// 回归：v3 team 只有 $ref（无数字 id）时，id 用 FNV 散列派生 —— 跨启动一致。
+    /// Regression: a v3 team with only a $ref (no numeric id) derives its id from the
+    /// FNV hash — consistent across launches.
     func testStandingsV3RefOnlyTeamGetsStableID() throws {
         let ref = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/teams/359"
         let resp = ESPNStandingsCoreResponse(
@@ -287,13 +292,14 @@ extension EPLViewerTests {
                     stats: nil, rank: 1, note: nil)
             ])
         let rows = ESPNTranslator.standingRows(from: resp)
-        XCTAssertFalse(rows.isEmpty, "有 records 的响应不应回退为空")
+        XCTAssertFalse(rows.isEmpty, "a response with records must not fall back to empty")
         XCTAssertEqual(rows.first?.team.id, ESPNTranslator.stableID(from: ref),
-                       "无数字 id 的 $ref 球队应得到跨启动稳定的 id")
+                       "a $ref team without a numeric id should get a launch-stable id")
     }
 
-    /// 回归：从赛果聚合积分榜时，积分/净胜球/进球完全相同的球队按 teamId 稳定排序 ——
-    /// stats 是字典、遍历顺序不定，没有最终 tiebreak 时两次聚合的行序可能不同。
+    /// Regression: aggregating standings from results orders fully-tied teams
+    /// (points/GD/GF identical) by teamId — `stats` is a dictionary with unspecified
+    /// iteration order, so without a final tiebreak row order could differ between runs.
     func testAggregateMatchesFullTieOrdersByTeamId() {
         func finishedMatch(id: Int, home: Int, away: Int, homeScore: Int, awayScore: Int) -> Match {
             let h = Team(id: home, name: "T\(home)", shortName: nil, crest: nil,
@@ -304,14 +310,14 @@ extension EPLViewerTests {
                          stage: nil, homeTeam: h, awayTeam: a,
                          score: Score(fullTime: FullTime(home: homeScore, away: awayScore)))
         }
-        // 两队各 1-0 取胜：积分/净胜球/进球完全相同
+        // Two 1-0 winners: identical points/GD/GF
         let matches = [
-            finishedMatch(id: 1, home: 30, away: 40, homeScore: 1, awayScore: 0),   // team 30 胜
-            finishedMatch(id: 2, home: 20, away: 50, homeScore: 1, awayScore: 0),   // team 20 胜
+            finishedMatch(id: 1, home: 30, away: 40, homeScore: 1, awayScore: 0),   // team 30 wins
+            finishedMatch(id: 2, home: 20, away: 50, homeScore: 1, awayScore: 0),   // team 20 wins
         ]
         let rows = StandingsAggregator.aggregate(matches: matches)
         XCTAssertEqual(rows.map(\.team.id), [20, 30, 40, 50],
-                       "完全同分的胜者按 teamId 升序，零分球队同样按 teamId 升序")
+                       "fully tied winners ascend by teamId; pointless teams likewise by teamId")
         XCTAssertEqual(rows.map(\.position), [1, 2, 3, 4])
         XCTAssertEqual(rows[0].points, 3)
         XCTAssertEqual(rows[1].points, 3)
@@ -319,7 +325,7 @@ extension EPLViewerTests {
         XCTAssertEqual(rows[1].goalsFor, 1)
     }
 
-    // MARK: - 积分榜排序（主场/客场榜按维度独立排名）
+    // MARK: - Standings sorting (home/away tabs rank independently)
 
     func standing(id: Int, position: Int, pts: Int,
                           gf: Int = 0, ga: Int = 0,
@@ -350,7 +356,8 @@ extension EPLViewerTests {
     }
 
     func testVenueTabSortsByVenuePointsAndRenumbers() {
-        // B 总榜第 1 但主场榜应排末位；A 主场榜第一。名次编号必须按主场榜重排。
+        // B leads overall but must sit last on the home table; A tops the home table.
+        // The rank numbers must renumber by the home dimension.
         let rows = [
             standing(id: 1, position: 1, pts: 90,
                      home: vs(played: 10, won: 9, draw: 0, lost: 1, gf: 25, ga: 8)),
@@ -363,12 +370,12 @@ extension EPLViewerTests {
         let names = home.map { $0.row.team.name }
         let ranks = home.compactMap { $0.rank }
         XCTAssertEqual(names, ["T1", "T3", "T2"],
-                       "主场榜应按主场积分降序，而不是沿用总榜顺序")
-        XCTAssertEqual(ranks, [1, 2, 3], "主场榜名次应重新编号 1...N")
+                       "the home table should order by home points, not overall order")
+        XCTAssertEqual(ranks, [1, 2, 3], "home-table ranks should renumber 1...N")
     }
 
     func testVenueTabTieBreaksByGoalDifferenceThenGoalsFor() {
-        // 同积分：T1 净胜球 -6 垫底；T2/T3 同为 +8，进球多者(20>12)靠前
+        // Equal points: T1's GD -6 sinks; T2/T3 both +8, more goals wins (20 > 12)
         let rows = [
             standing(id: 1, position: 1, pts: 5, away: vs(played: 3, won: 1, draw: 2, lost: 0, gf: 4, ga: 10)),
             standing(id: 2, position: 2, pts: 5, away: vs(played: 3, won: 1, draw: 2, lost: 0, gf: 12, ga: 4)),
@@ -376,11 +383,11 @@ extension EPLViewerTests {
         ]
         let away = StandingsSorter.rankedStandings(rows: rows, for: .away)
         XCTAssertEqual(away.map { $0.row.team.id }, [3, 2, 1],
-                       "同分时应按净胜球、再按进球降序")
+                       "on equal points, break by GD then goals, descending")
     }
 
     func testVenueTabPushesTeamsWithoutVenueDataToBottomUnranked() {
-        // 尚未在主/客场踢过球的队伍：沉底、不给名次，且不占用名次编号
+        // Teams yet to play home/away: sink, get no rank, and occupy no number slot
         let rows = [
             standing(id: 1, position: 1, pts: 50, home: vs(played: 2, won: 2, draw: 0, lost: 0, gf: 6, ga: 1)),
             standing(id: 2, position: 2, pts: 40),
@@ -389,8 +396,8 @@ extension EPLViewerTests {
         let home = StandingsSorter.rankedStandings(rows: rows, for: .home)
         XCTAssertEqual(home.map { $0.row.team.id }, [1, 3, 2])
         XCTAssertEqual(home.map { $0.rank }, [1, 2, nil],
-                       "无主场数据的队伍不给名次")
-        XCTAssertEqual(Set(home.map { $0.id }).count, 3, "行 id 必须互不相同")
+                       "teams without home data get no rank")
+        XCTAssertEqual(Set(home.map { $0.id }).count, 3, "row ids must be unique")
     }
 
     func testOverallAndFormTabKeepSourceOrder() {
@@ -402,18 +409,19 @@ extension EPLViewerTests {
         for tab in [StandingsTab.overall, .form] {
             let out = StandingsSorter.rankedStandings(rows: rows, for: tab)
             XCTAssertEqual(out.map { $0.row.team.id }, [7, 8, 9],
-                           "\(tab.rawValue) tab 应保持数据源顺序")
+                           "\(tab.rawValue) tab should keep the source order")
             XCTAssertEqual(out.map { $0.rank }, [3, 1, 2],
-                           "\(tab.rawValue) tab 名次应沿用总榜 position")
+                           "\(tab.rawValue) tab ranks should reuse the overall position")
         }
     }
 
     func testRankedStandingIdDiffersByRank() {
-        // 关键护栏：同一支球队在不同名次下 id 不同，否则切 tab 会让 ForEach 错配
+        // Key guard: the same team under different ranks must have different ids, or
+        // tab switches mispair ForEach rows
         let row = standing(id: 1, position: 3, pts: 10)
         XCTAssertNotEqual(RankedStanding(row: row, rank: 1).id,
                           RankedStanding(row: row, rank: 3).id,
-                          "同一球队在不同名次下 id 必须不同")
+                          "the same team must have different ids under different ranks")
         XCTAssertNotEqual(RankedStanding(row: row, rank: nil).id,
                           RankedStanding(row: row, rank: 1).id)
     }
@@ -421,14 +429,15 @@ extension EPLViewerTests {
     func testStandingRowIdIsStableUnderRerank() {
         let a = standing(id: 1, position: 1, pts: 30)
         let b = standing(id: 1, position: 3, pts: 10)
-        XCTAssertNotEqual(a.id, b.id, "同一球队在不同 position 下 id 必须不同")
+        XCTAssertNotEqual(a.id, b.id, "the same team must have different ids at different positions")
         XCTAssertEqual(a.id, "pos1-team1")
     }
 
-    // MARK: - 积分榜 form（状态）补全
+    // MARK: - Standings form enrichment
 
     func testEnrichDerivesFormFromMatchesWhenMissing() {
-        // 这是「状态 tab 长期全破折号」的回归用例：enrich 必须从赛程推导 form
+        // The regression for "the form tab was all dashes forever": enrich must derive
+        // form from fixtures
         let rows = [standing(id: 1, position: 1, pts: 6)]
         let matches = [
             scoredMatch(id: 1, home: 1, away: 2, date: "2026-09-01T14:00:00Z", score: (2, 0)),   // W
@@ -437,13 +446,14 @@ extension EPLViewerTests {
         ]
         let enriched = StandingsEnricher.enrich(rows: rows, with: matches)
         XCTAssertEqual(enriched.first?.form, "WLD",
-                       "form 应从最近 3 场按时间升序推导，而不是留空")
-        XCTAssertNotNil(enriched.first?.home, "主场数据应被补全")
-        XCTAssertNotNil(enriched.first?.away, "客场数据应被补全")
+                       "form should derive from the last 3 matches in chronological order, not stay empty")
+        XCTAssertNotNil(enriched.first?.home, "home data should be filled")
+        XCTAssertNotNil(enriched.first?.away, "away data should be filled")
     }
 
     func testEnrichNormalizesCommaSeparatedForm() {
-        // 本地示例数据是 "D,W,W,D,W"，UI 按前 5 个字符渲染，不归一会把逗号画成胶囊
+        // The old sample data was "D,W,W,D,W"; the UI renders the first 5 characters —
+        // without normalization commas would render as capsules
         let rows = [standing(id: 1, position: 1, pts: 6, form: "D,W,W,D,W")]
         let enriched = StandingsEnricher.enrich(rows: rows, with: [])
         XCTAssertEqual(enriched.first?.form, "DWWDW")
@@ -459,16 +469,16 @@ extension EPLViewerTests {
             scoredMatch(id: 2, home: 2, away: 1, date: "2026-09-08T14:00:00Z", score: (1, 0))
         ]
         let enriched = StandingsEnricher.enrich(rows: rows, with: matches)
-        XCTAssertEqual(enriched[0].form, "DWWDW", "已有 form 应归一化后保留")
+        XCTAssertEqual(enriched[0].form, "DWWDW", "an existing form should be kept after normalization")
         XCTAssertEqual(enriched[1].form, "LW",
-                       "缺失的 form 应从赛程按时间推导（第 1 场客战 0:2 输、第 2 场主场 1:0 赢）")
+                       "a missing form should derive from fixtures in time order (away 0:2 loss, then home 1:0 win)")
     }
 
     func testNormalizeFormEdgeCases() {
         XCTAssertEqual(StandingsEnricher.normalizeForm("W,W,D,L,W"), "WWDLW")
         XCTAssertEqual(StandingsEnricher.normalizeForm("  W L D  "), "WLD")
         XCTAssertEqual(StandingsEnricher.normalizeForm("WWWWWW"), "WWWWW",
-                       "应截断到最近 5 场")
+                       "should truncate to the most recent 5")
         XCTAssertEqual(StandingsEnricher.normalizeForm("———"), nil)
         XCTAssertEqual(StandingsEnricher.normalizeForm(""), nil)
         XCTAssertEqual(StandingsEnricher.normalizeForm(nil), nil)

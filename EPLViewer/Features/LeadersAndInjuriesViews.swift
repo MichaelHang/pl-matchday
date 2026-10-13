@@ -1,11 +1,11 @@
 import SwiftUI
 
-// MARK: - 射手/助攻 榜 ViewModel（合并版）
+// MARK: - Scorers/assists view model (combined)
 
-/// 同时持有射手榜与助攻榜数据，UI 内部通过 segmented 切换显示
+/// Holds both leaderboards; the UI switches between them with a segmented control.
 @Observable
 final class LeadersViewModel {
-    /// 当前选中的排行榜类型
+    /// The currently selected leaderboard type.
     enum RankType: CaseIterable, Identifiable {
         case goals, assists
         var id: String { "\(self)" }
@@ -24,9 +24,10 @@ final class LeadersViewModel {
 
     @MainActor
     func load() async {
-        // ⚠️ 两组数据都依赖 FPL bootstrap（实测可能慢到几十秒仍不结束），
-        // 原本又是串行 await，最坏要等两遍。改成并发取 + 各 15 秒预算：
-        // 超时就放弃那组、UI 显示空状态，绝不让页面一直转圈。
+        // ⚠️ Both datasets depend on the FPL bootstrap (observed to hang for tens of
+        // seconds), and they used to be awaited serially — worst case double the wait.
+        // Now concurrent with a 15 s budget each: a timed-out group shows empty rather
+        // than spinning forever.
         async let scorersResult: ([Scorer], DataSource)? = withTimeBudget(seconds: 15) {
             try? await DataRepository.scorers()
         }
@@ -38,13 +39,14 @@ final class LeadersViewModel {
 
         scorers = s?.0 ?? []
         assists = a?.0 ?? []
-        // 数据来源以仓库返回为准：网络失败回退过期缓存时是 .stale。
-        // 旧实现只看「数组非 nil」就标 .live，把兜底数据误标成了在线。
+        // Trust the repository's reported source: a stale-cache fallback is .stale.
+        // The old code marked .live whenever the array was non-nil, mislabeling
+        // fallback data as live.
         source = (s?.1 == .live || a?.1 == .live) ? .live : .sample
         error = nil
     }
 
-    /// 进球榜：进球降序 → 并列按出场升序 → 并列按名字字典序
+    /// Goals: goals desc → fewest appearances → name.
     var scorersSorted: [Scorer] {
         scorers.sorted {
             if $0.goals != $1.goals { return $0.goals > $1.goals }
@@ -55,7 +57,7 @@ final class LeadersViewModel {
         }
     }
 
-    /// 助攻榜：助攻降序 → 并列按进球数降序 → 并列按出场升序
+    /// Assists: assists desc → most goals → fewest appearances.
     var assistsSorted: [Assist] {
         assists.sorted {
             if $0.assists != $1.assists { return $0.assists > $1.assists }
@@ -66,10 +68,10 @@ final class LeadersViewModel {
     }
 }
 
-// MARK: - 射手/助攻 榜视图（合并版）
+// MARK: - Scorers/assists view (combined)
 
-/// 射手榜与助攻榜合并到一个 tab，顶部 segmented 切换显示
-/// 共享同一份 ViewModel 数据源，避免重复请求
+/// Both leaderboards in one tab with a segmented switch on top; one shared view
+/// model avoids duplicate requests.
 struct LeadersView: View {
     @Environment(AppState.self) private var appState
     @State private var vm = LeadersViewModel()
@@ -78,7 +80,7 @@ struct LeadersView: View {
     var body: some View {
         @Bindable var appState = appState
         VStack(spacing: 0) {
-            // 类型切换（进球 / 助攻）
+            // Type switch (goals / assists)
             Picker(UIString.leaders.text(appState.language), selection: $rankType) {
                 ForEach(LeadersViewModel.RankType.allCases) { type in
                     Text(type.title(appState.language)).tag(type)
@@ -94,8 +96,10 @@ struct LeadersView: View {
         }
         .navigationTitle(UIString.leaders.text(appState.language))
         .task(id: appState.refreshNonce) {
-            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
-            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            // Background polling refreshes silently: no full-screen overlay (a flash
+            // every 60 s on matchdays is very disruptive); first load / manual refresh
+            // keep it. isLoading still resets unconditionally so the overlay can never
+            // stick under odd timings.
             if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
@@ -132,7 +136,7 @@ struct LeadersView: View {
     }
 }
 
-/// 单行：排名 + 球员 + 球队 + 进球/助攻
+/// One row: rank + player + team + goals/assists.
 private struct ScorerRow: View {
     @Environment(AppState.self) private var appState
     let index: Int
@@ -166,7 +170,7 @@ private struct ScorerRow: View {
         .padding(.vertical, 4)
     }
 
-    /// 前三名奖牌玻璃徽标（金/银/铜），其余只显示名次
+    /// Glass medals for the top three (gold/silver/bronze); plain rank otherwise.
     @ViewBuilder
     private func rankBadge(_ index: Int) -> some View {
         if index < 3 {
@@ -185,7 +189,7 @@ private struct ScorerRow: View {
     }
 }
 
-// MARK: - 伤停榜
+// MARK: - Injuries
 
 @Observable
 final class InjuriesViewModel {
@@ -195,19 +199,20 @@ final class InjuriesViewModel {
 
     @MainActor
     func load() async {
-        // ⚠️ 同样依赖 FPL bootstrap：给 15 秒预算，超时就显示空状态，
-        // 绝不让页面一直转圈（原因同 LeadersViewModel）。
+        // ⚠️ Also depends on the FPL bootstrap: 15 s budget, empty state on timeout —
+        // never an endless spinner (same rationale as LeadersViewModel).
         let result: ([Injury], DataSource)? = await withTimeBudget(seconds: 15) { () -> ([Injury], DataSource)? in
             try? await DataRepository.injuries()
         }
         injuries = result?.0 ?? []
-        // 来源以仓库返回为准（见 LeadersViewModel 同款修复：数组非 nil ≠ 在线）
+        // Trust the repository's reported source (same fix as LeadersViewModel:
+        // non-nil array ≠ live)
         source = result?.1 ?? .sample
         error = nil
     }
 }
 
-/// 伤停榜（球员/球队/状态/伤情/出场概率）
+/// Injuries (player / team / status / news / chance of playing).
 struct InjuriesView: View {
     @Environment(AppState.self) private var appState
     @State private var vm = InjuriesViewModel()
@@ -262,8 +267,10 @@ struct InjuriesView: View {
         }
         .navigationTitle(UIString.injuries.text(appState.language))
         .task(id: appState.refreshNonce) {
-            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
-            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            // Background polling refreshes silently: no full-screen overlay (a flash
+            // every 60 s on matchdays is very disruptive); first load / manual refresh
+            // keep it. isLoading still resets unconditionally so the overlay can never
+            // stick under odd timings.
             if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
@@ -272,7 +279,7 @@ struct InjuriesView: View {
         .overlay { if appState.isLoading { LoadingView() } }
     }
 
-    /// 伤停状态标签（彩色）
+    /// Colored injury status tag.
     @ViewBuilder
     private func statusTag(_ status: String) -> some View {
         let lang = appState.language

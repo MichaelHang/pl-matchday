@@ -1,82 +1,74 @@
-# EPLViewer - 英超联赛信息查看 App
+# EPLViewer — Premier League Companion App
 
-一款 macOS 26 原生 SwiftUI App（Liquid Glass 视觉），混合数据源查看英超赛季信息。
+A native SwiftUI app for macOS 26 (Liquid Glass look) that follows the Premier League season through a hybrid of public data sources.
 
-## 功能板块
+## Features
 
-- **积分榜**：实时排名，升降级区高亮（ESPN v3，记录缺失时从赛程实时聚合）
-- **赛程**：整季赛程一次拉取（FPL fixtures，ESPN scoreboard 兜底）
-- **球队与球员**：8+ 球队详情，含完整 squad（FPL bootstrap）
-- **射手榜 / 助攻榜**：进球/助攻排行（FPL 派生）
-- **伤停榜**：伤情状态、可出战概率（FPL 派生）
+- **Standings** — live table with European / relegation zone highlighting (ESPN v3; falls back to on-the-fly aggregation from played fixtures while ESPN's records are empty)
+- **Fixtures** — full-season schedule in one pull (FPL fixtures, ESPN scoreboard as fallback)
+- **Players** — top scorers & top assists (derived from FPL)
+- **Injuries** — status, news and chance of playing next round (derived from FPL)
 
-## 数据源
+## Data Sources
 
-| 数据 | 来源 | 缓存 TTL |
+| Data | Source | Cache TTL |
 |---|---|---|
-| 完整赛程 / 比分 | FPL fixtures（ESPN scoreboard 兜底） | 5 分钟（手动刷新绕过） |
-| FPL bootstrap（球队/球员/射手/助攻/伤停） | Fantasy Premier League 公开端点 | 2 小时 |
-| 积分榜 / 当日赛果 | ESPN v3 | 各 5 分钟 |
+| Fixtures & scores | FPL fixtures (ESPN scoreboard fallback) | 5 min |
+| FPL bootstrap (players / scorers / assists / injuries) | Fantasy Premier League public endpoint | 2 h |
+| Standings | ESPN v3 | 5 min |
 
-零 API Key、零 Python 依赖。断网自动回退**上次缓存的数据**（stale-if-error，忽略缓存 TTL）；全新安装且从未成功联网时显示空状态，不内置任何假数据。
+No API key, no Python dependency. Offline (or on timeout) the app falls back to **the last successfully cached data** (stale-if-error, TTL ignored). A fresh install that has never reached the network shows empty states — no bundled fake data.
 
----
+## Development
 
-## 开发与构建
-
-### 方式 1：直接用 Xcode 26 打开（推荐）
+### Option 1: Open in Xcode 26 (recommended)
 
 ```bash
 open /Users/hangbo/Code/Github/PremierLeague/EPLViewer.xcodeproj
-# Xcode 里 Cmd+R 运行（Cmd+U 跑测试）
+# Cmd+R to run, Cmd+U to test
 ```
 
-> Xcode 26 GUI 在 macOS 26 下用原生进程环境编译，**Liquid Glass、`@Observable`、Observation 宏全部原生支持**，不会有 sandbox 下子进程派生问题。
-
-### 方式 2：用命令行 xcodebuild
+### Option 2: Command line
 
 ```bash
-cd /Users/hangbo/Code/Github/PremierLeague/EPLViewer
-xcodebuild -scheme EPLViewer -configuration Debug build       # 编译
-xcodebuild -scheme EPLViewer -configuration Debug test        # 跑单元测试
-xcodebuild -scheme EPLViewer -configuration Release build     # 发布编译
+cd /Users/hangbo/Code/Github/PremierLeague
+xcodebuild -scheme EPLViewer -configuration Debug build       # build
+xcodebuild -scheme EPLViewer -configuration Debug test        # unit tests
+xcodebuild -scheme EPLViewer -configuration Release build     # release build
 ```
-> 工程已是**纯 Xcode 工程**（`EPLViewer.xcodeproj`），不再有 `Package.swift` / `project.yml` / XcodeGen。
 
-### 方式 3：打 .app 包后用 Finder 启动
+### Option 3: Build a .app bundle
 
 ```bash
-cd /Users/hangbo/Code/Github/PremierLeague/EPLViewer
-./build-app.sh                # 用 xcodebuild 编译 release 并打 build/EPLViewer.app
-open build/EPLViewer.app      # 在 Finder 双击也可
+./build-app.sh             # release build + bundle at build/EPLViewer.app
+open build/EPLViewer.app
 ```
 
----
-
-## 工程结构
+## Project Layout
 
 ```
-.                                 # 仓库根 = 项目根
-├── EPLViewer.xcodeproj           # Xcode 工程（真源，手工维护，纳入版本管理）
-├── EPLViewer/                    # 主 target 源码
-│   ├── App/                      # 入口与全局壳：@main / AppState / ContentView / SettingsView / Sidebar / TopBar
-│   ├── Core/                     # 数据层：Models / Networking（ESPN+FPL 客户端）/ Cache / Translators / DataRepository / Support
-│   ├── Features/                 # 板块视图：Today / Fixtures / Standings / LeadersAndInjuries
-│   ├── Localization/             # 译名：TranslationStore + PlayerNames + TeamNames + Resources/*.json
-│   └── Common/                   # CommonViews（三态视图 / CrestImage / 品牌色）+ UIStrings
-├── EPLViewerTests/               # 200+ 项单元测试（按域拆分：Today / Fixtures / Standings / Scheduler / Localization / Guard）
-├── Tools/                        # player_names_editor.py（译名辅助工具）
-├── docs/                         # 设计文档（history/ 内为历史交付快照）
-└── build-app.sh                  # 用 xcodebuild 打 .app Bundle
+.                                 # repo root = project root
+├── EPLViewer.xcodeproj           # Xcode project (hand-maintained, single source of truth)
+├── EPLViewer/                    # app target sources
+│   ├── App/                      # entry & global shell: @main / AppState / ContentView / SettingsView / Sidebar / TopBar
+│   ├── Core/                     # data layer: Models / Networking (ESPN+FPL clients) / Cache / Translators / DataRepository / Support
+│   ├── Features/                 # feature views: Today / Fixtures / Standings / LeadersAndInjuries
+│   ├── Localization/             # translations: TranslationStore + PlayerNames + TeamNames + Resources/*.json
+│   └── Common/                   # CommonViews (state views / CrestImage / brand colors) + UIStrings
+├── EPLViewerTests/               # 200+ unit tests, split by domain (Today / Fixtures / Standings / Scheduler / Localization / Guard)
+├── docs/                         # design docs (history/ holds archived delivery snapshots)
+└── build-app.sh                  # xcodebuild release + .app bundle
 ```
 
-## 维护说明（纯 Xcode 工程）
+## Maintenance Notes
 
-- **新增 / 移动源文件**：在 Xcode 中拖入或移除即可（会自动写入 `EPLViewer.xcodeproj/project.pbxproj`）；纯命令行场景可手改 pbxproj 的 `PBXBuildFile` / `PBXFileReference` / `PBXSourcesBuildPhase` 三段。
-- **不再有** `Package.swift`、`project.yml`，也没有 XcodeGen 生成步骤。`EPLViewer.xcodeproj` 即为唯一真源，增删文件后无需再跑任何生成命令。
+- **Adding / moving source files**: drag in or remove via Xcode (writes to `EPLViewer.xcodeproj/project.pbxproj` automatically). From the command line, edit the `PBXBuildFile` / `PBXFileReference` / build-phase sections of the pbxproj by hand.
+- There is **no** `Package.swift`, `project.yml` or XcodeGen step — `EPLViewer.xcodeproj` is the single source of truth.
+- **Player / team name tables** live in `EPLViewer/Localization/Resources/*.json`; add a translation by editing the JSON (or by using the in-app DEBUG override manager). To support a new language, add another locale file (e.g. `TeamNames-zh-Hant.json`).
+- The test suite includes **source-text guard tests** that assert on literal implementation details; when changing an implementation on purpose, update the corresponding assertion (keep the guard, don't delete it).
 
-## 已知限制
+## Known Limitations
 
-- **首次安装且断网**：没有任何本地数据可显示（不内置假样例），联网成功一次后即有缓存兜底
-- **数据 ID 跨源**：积分榜（ESPN）与球员数据（FPL）用不同 id 体系
-- **首次启动延迟**：拉一次 FPL bootstrap（~1MB），之后 2 小时缓存
+- **Offline on first install**: nothing to show (no bundled sample data); after one successful fetch the cache takes over as the offline fallback.
+- **Cross-source IDs**: standings (ESPN) and player data (FPL) use different id spaces.
+- **First-launch latency**: one FPL bootstrap fetch (~1 MB), cached for 2 hours afterwards.

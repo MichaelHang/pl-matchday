@@ -1,15 +1,15 @@
 import Foundation
 
-// MARK: - 基础子模型
+// MARK: - Basic submodels
 
-/// 教练信息
+/// Coach info.
 struct Coach: Codable, Identifiable {
     let id: Int?
     let name: String
     let nationality: String?
 }
 
-/// 球员信息（球队阵容中使用）
+/// Player info (used in team squads).
 struct Player: Codable, Identifiable {
     let id: Int?
     let name: String
@@ -18,7 +18,7 @@ struct Player: Codable, Identifiable {
     let nationality: String?
 }
 
-/// 球队信息
+/// Team info.
 struct Team: Codable, Identifiable {
     let id: Int
     let name: String
@@ -30,22 +30,22 @@ struct Team: Codable, Identifiable {
     let squad: [Player]?
 }
 
-// MARK: - 比分相关
+// MARK: - Scores
 
-/// 全场比分
+/// Full-time score.
 struct FullTime: Codable {
     let home: Int?
     let away: Int?
 }
 
-/// 比分（可扩展半场等）
+/// Score (extensible with halftime etc.).
 struct Score: Codable {
     let fullTime: FullTime?
 }
 
-// MARK: - 比赛
+// MARK: - Matches
 
-/// 单场比赛
+/// A single match.
 struct Match: Codable, Identifiable {
     let id: Int
     let matchday: Int?
@@ -57,21 +57,21 @@ struct Match: Codable, Identifiable {
     let score: Score?
 }
 
-/// 比赛列表响应
+/// Matches list response.
 struct MatchesResponse: Decodable {
     let matches: [Match]
 }
 
-// MARK: - 球队列表
+// MARK: - Teams
 
-/// 球队列表响应
+/// Teams list response.
 struct TeamsResponse: Decodable {
     let teams: [Team]
 }
 
-// MARK: - 积分榜
+// MARK: - Standings
 
-/// 单支球队的积分榜行
+/// One team's standings row.
 struct StandingRow: Codable, Identifiable {
     let position: Int
     let team: Team
@@ -83,18 +83,21 @@ struct StandingRow: Codable, Identifiable {
     let goalsFor: Int
     let goalsAgainst: Int
     let goalDifference: Int
-    let form: String?         // 近 5 场胜负序列，如 "WWDLW"
-    let status: String?       // 升降级区标识，如 "CHAMPIONS_LEAGUE" / "RELEGATION"
-    let home: VenueStats?     // 主场战绩（ESPN 不直接给，由本地从赛程聚合）
-    let away: VenueStats?     // 客场战绩（同上）
+    let form: String?         // last-5 results, e.g. "WWDLW"
+    let status: String?       // zone marker, e.g. "CHAMPIONS_LEAGUE" / "RELEGATION"
+    let home: VenueStats?     // home record (ESPN doesn't provide it; aggregated locally from fixtures)
+    let away: VenueStats?     // away record (same)
 
-    /// 唯一标识：**不能只用 position**。
-    /// 主场/客场榜会把行按该维度重排并重新编号 1...N，同一支球队在不同榜里 position 不同；
-    /// 若 id 只取 position，同一榜单内可能撞 id、跨榜 diff 也会错配，SwiftUI ForEach 直接警告。
+    /// Stable identity: **position alone is not enough**.
+    /// Home/away tables re-sort and renumber rows 1...N within that dimension, so the
+    /// same team has different positions in different tables; an id of just the
+    /// position could collide within one table and misalign cross-table diffing,
+    /// triggering SwiftUI ForEach warnings.
     var id: String { "pos\(position)-team\(team.id)" }
 
-    /// 用 home/away/form 构造副本。其它字段全部沿用。
-    /// 用于 enrichment 路径：ESPN 只给总积分，home/away/form 由本地从赛程聚合补全。
+    /// Copy with home/away/form replaced; every other field is carried over.
+    /// Used by the enrichment path: ESPN only provides totals; home/away/form are
+    /// aggregated locally from fixtures.
     func with(home: VenueStats? = nil, away: VenueStats? = nil, form: String? = nil) -> StandingRow {
         StandingRow(
             position: position, team: team,
@@ -106,7 +109,7 @@ struct StandingRow: Codable, Identifiable {
     }
 }
 
-/// 球队在「主场」或「客场」维度下的战绩
+/// A team's record in the home or away dimension.
 struct VenueStats: Codable, Equatable {
     let played: Int
     let won: Int
@@ -117,28 +120,28 @@ struct VenueStats: Codable, Equatable {
     let points: Int
 }
 
-/// 单个积分榜表格（阶段/类型 + 行）
+/// One standings table (stage/type + rows).
 struct StandingTable: Codable {
     let stage: String?
     let type: String?
     let table: [StandingRow]
 }
 
-/// 积分榜响应
+/// Standings response.
 struct StandingsResponse: Codable {
     let standings: [StandingTable]
 }
 
-// MARK: - 射手榜 / 助攻榜 / 伤停榜
+// MARK: - Scorers / assists / injuries
 
-/// 精简球员信息（榜单类通用）
+/// Minimal player info (shared by leaderboard models).
 struct PlayerLite: Decodable, Identifiable {
     let id: Int?
     let name: String
     let nationality: String?
 }
 
-/// 射手
+/// A scorer.
 struct Scorer: Decodable, Identifiable {
     let player: PlayerLite
     let team: Team
@@ -146,24 +149,24 @@ struct Scorer: Decodable, Identifiable {
     let assists: Int?
     let playedMatches: Int?
 
-    /// 稳定的唯一标识（player.id 可能为空时回退到名称）
+    /// Stable identity (falls back to the name when player.id is nil).
     var id: String { "\(player.id.map(String.init) ?? player.name)-\(team.id)" }
 }
 
-/// 射手榜响应
+/// Scorers response.
 struct ScorersResponse: Decodable {
     let scorers: [Scorer]
 }
 
-/// 助攻（与射手共用结构，按 assists 排序即可；为语义清晰单独命名）
+/// An assist entry (same shape as Scorer, sorted by assists; named separately for clarity).
 struct Assist: Identifiable {
     let player: PlayerLite
     let team: Team
     let assists: Int
     let playedMatches: Int?
-    let goals: Int?  // 顺带展示进球数
+    let goals: Int?  // shown alongside
 
-    /// 稳定的唯一标识
+    /// Stable identity.
     var id: String { "\(player.id.map(String.init) ?? player.name)-\(team.id)" }
 
     init(from scorer: Scorer) {
@@ -175,7 +178,7 @@ struct Assist: Identifiable {
     }
 }
 
-/// 伤停球员
+/// An injured/unavailable player.
 struct Injury: Decodable, Identifiable {
     let player: PlayerLite
     let team: Team
@@ -187,14 +190,14 @@ struct Injury: Decodable, Identifiable {
     var id: String { "\(player.id.map(String.init) ?? player.name)-\(team.id)" }
 }
 
-/// 伤停响应
+/// Injuries response.
 struct InjuriesResponse: Decodable {
     let injuries: [Injury]
 }
 
-// MARK: - 错误与数据源枚举
+// MARK: - Errors & data source
 
-/// 应用错误类型
+/// App error type.
 enum AppError: Error, LocalizedError {
     case noData
     case apiError(Int)
@@ -215,24 +218,27 @@ enum AppError: Error, LocalizedError {
     }
 }
 
-/// 数据来源
+/// Where the data came from.
 enum DataSource: String {
-    case live   // 来自公开接口（ESPN + FPL）
-    /// 网络失败时回退的「上次成功落盘的缓存」—— 内容真实但可能过期（stale-if-error）
+    case live   // from the public APIs (ESPN + FPL)
+    /// The last successfully persisted cache, served on network failure —
+    /// real content, possibly outdated (stale-if-error).
     case stale
-    /// 占位：完全无数据（如首次安装且从未成功联网）。不再有内置示例文件。
+    /// Placeholder: no data at all (e.g. offline on first launch). No bundled samples.
     case sample
 }
 
-// MARK: - 当前轮推断（网络兜底）
+// MARK: - Current-round inference (network fallback)
 
-/// 从赛程数据本地推断「当前轮」。
+/// Infers the "current round" locally from fixtures.
 ///
-/// 用途：FPL 的 `events` 拿不到时（接口超时 / 网络失败）的兜底。
-/// 赛程页和今日页都要用，所以抽出来共用 —— 避免同一个推断规则写两遍。
+/// Used as a fallback when FPL `events` is unavailable (timeout / network failure).
+/// Both the fixtures page and the today page need it, so the rule lives here once
+/// instead of being written twice.
 enum CurrentRoundInference {
-    /// - 规则：取第一个**还有未结束比赛**的轮次；若全部已结束，取最后一个有比赛的轮次。
-    /// - Returns: 推断出的轮次；无任何赛程数据时返回 nil
+    /// - Rule: the first round that still has unfinished matches; if all are finished,
+    ///   the last round with any matches.
+    /// - Returns: the inferred round; nil when there is no fixture data at all.
     static func infer(from matches: [Match]) -> Int? {
         var byRound: [Int: [Match]] = [:]
         for m in matches {

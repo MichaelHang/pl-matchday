@@ -1,9 +1,9 @@
 import Foundation
 import SwiftUI
 
-// MARK: - 视图模式
+// MARK: - View mode
 
-/// 积分榜 4 个 tab：总 / 主场 / 客场 / 状态
+/// Standings tabs: overall / home / away / form.
 enum StandingsTab: String, CaseIterable, Identifiable {
     case overall, home, away, form
     var id: String { rawValue }
@@ -11,29 +11,30 @@ enum StandingsTab: String, CaseIterable, Identifiable {
 
 // MARK: - ViewModel
 
-/// 积分榜视图模型（@Observable）
+/// Standings view model (@Observable).
 @Observable
 final class StandingsViewModel {
     var rows: [StandingRow] = []
-    var tab: StandingsTab = .overall       // 当前 tab，@Observable 触发视图自动重绘
+    var tab: StandingsTab = .overall       // current tab; @Observable redraws the view
     var source: DataSource = .sample
     var error: AppError?
 
-    /// 用于「主场/客场/状态」tab 本地补全的赛程数据。tab=overall 时不读。
+    /// Fixtures used to fill the home/away/form tabs locally. Unused on the overall tab.
     private var cachedMatches: [Match] = []
 
-    /// 按当前 tab 重新排序后的行。
-    /// 总榜保持数据源顺序；主/客场榜按该维度积分重排并重新编号；
-    /// 状态 tab 沿用主积分榜顺序（不做二次排序）。
+    /// Rows re-ranked for the current tab.
+    /// Overall keeps source order; home/away re-rank and renumber within the dimension;
+    /// form keeps the main table order (no second sort).
     func ranked(tab: StandingsTab) -> [RankedStanding] {
         StandingsSorter.rankedStandings(rows: rows, for: tab)
     }
 
     @MainActor
     func load() async {
-        // ⚠️ standings 内部有多级 fallback（ESPN 直连 → 从赛程聚合 → 过期缓存），
-        // 每级在慢网络上都可能耗掉大量时间，最坏情况能拖到一分钟。
-        // 这里给整体加 25 秒预算：超时显示空状态，绝不让 UI 无限等待。
+        // ⚠️ standings() has multiple fallback tiers (ESPN direct → fixture
+        // aggregation → stale cache), each of which can burn serious time on a slow
+        // network — worst case around a minute. A 25 s overall budget bounds it: on
+        // timeout show the empty state, never an endless wait.
         let result = await withTimeBudget(seconds: 25) { () -> ([StandingRow], DataSource)? in
             try? await DataRepository.standings()
         }
@@ -43,42 +44,46 @@ final class StandingsViewModel {
             base = data
             src = s
         } else {
-            // 超预算 → 空数据（不抛错、不转圈；内部 stale 兜底失败才会走到这里）
+            // Over budget → empty (no throw, no spinner; only reached if the internal
+            // stale fallback failed too)
             base = []
             src = .sample
         }
 
-        // 拉赛程数据用于 home/away enrichment（已有 MemoryStore 缓存，秒回）
+        // Fetch fixtures for home/away enrichment (MemoryStore hit, instant when warm)
         let matchesResult = await withTimeBudget(seconds: 5) { () -> ([Match], DataSource)? in
             try? await DataRepository.matches()
         }
         cachedMatches = matchesResult?.0 ?? []
 
-        // enrichment：保留 ESPN 给的 home/away，没给的用本地聚合补
+        // Enrichment: keep ESPN-provided home/away; fill the rest by local aggregation
         rows = StandingsEnricher.enrich(rows: base, with: cachedMatches)
         source = src
         error = nil
     }
 }
 
-// MARK: - 行展示形态
+// MARK: - Row display shape
 
-/// 一行「行数据 + 当前 tab 下的名次」。
+/// One row: "row data + rank in the current tab".
 ///
-/// `rank` 可空：主/客场榜中尚未在该维度踢过球的球队不给名次，名次编号也不占位
-/// （显示破折号）。总榜/状态 tab 直接沿用原 position。
+/// `rank` is optional: in home/away tables a team yet to play in that dimension gets
+/// no rank (and no number slot — a dash is shown). Overall/form reuse the original
+/// position.
 struct RankedStanding: Identifiable {
     let row: StandingRow
     let rank: Int?
 
-    /// ⚠️ 必须把 rank 编进 id：同一支球队在总榜第 3、主场榜第 1 时 id 不同。
-    /// 若只用 team.id，切 tab 会让 ForEach 把两行的 diff 错配（动画/滚动位置都会乱）。
+    /// ⚠️ The rank must be part of the id: the same team is #3 overall but #1 at home
+    /// — different ids. Using team.id alone would make ForEach mispair rows across
+    /// tab switches (animations and scroll positions go haywire).
     var id: String { "\(rank.map(String.init) ?? "x")-\(row.team.id)" }
 }
 
-/// 积分榜排序：总榜不动，主/客场按该维度独立排名，状态 tab 沿用主榜顺序。
+/// Standings sorting: overall unchanged; home/away ranked independently within their
+/// dimension; form keeps the main order.
 enum StandingsSorter {
-    /// 按「积分 → 净胜球 → 进球」降序；该维度无数据的行沉底且不给名次。
+    /// Points → GD → GF descending; rows without data in the dimension sink unranked.
     static func rankedStandings(rows: [StandingRow], for tab: StandingsTab) -> [RankedStanding] {
         guard tab == .home || tab == .away else {
             return rows.map { RankedStanding(row: $0, rank: $0.position) }
@@ -91,11 +96,11 @@ enum StandingsSorter {
                 return (sa.points, sa.goalsFor - sa.goalsAgainst, sa.goalsFor)
                      > (sb.points, sb.goalsFor - sb.goalsAgainst, sb.goalsFor)
             case (nil, nil):
-                return false                 // 保持原相对顺序
+                return false                 // keep original relative order
             case (nil, _):
-                return false                 // 无数据沉底
+                return false                 // no data sinks
             default:
-                return true                  // 有数据的排前面
+                return true                  // teams with data first
             }
         }
         var next = 0
@@ -107,14 +112,14 @@ enum StandingsSorter {
     }
 }
 
-// MARK: - 视图
+// MARK: - View
 
-/// 积分榜：4 tab（总 / 主场 / 客场 / 状态），整张表格是带圆角的"卡片"
+/// Standings: 4 tabs (overall / home / away / form); the whole table is one rounded card.
 struct StandingsView: View {
     @Environment(AppState.self) private var appState
     @State private var vm = StandingsViewModel()
 
-    /// 表格卡片圆角，与 TodayView 的 FeaturedMatchCard / Sidebar 保持一致
+    /// Table card corner radius, consistent with TodayView's FeaturedMatchCard / Sidebar.
     private let cardCornerRadius: CGFloat = 12
 
     var body: some View {
@@ -128,14 +133,16 @@ struct StandingsView: View {
         .padding(.top, 10)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // 详情页顶部标题统一显示 "xxxx-xxxx 英超联赛"（取自 appTitle + SeasonStore.seasonLabel），
-        // 与侧边栏标题保持一致 —— 用户对全 app 顶部标题的预期是「这是哪个赛季的英超应用」，
-        // 至于具体在看哪个页面，已经由侧边栏选中项指示。
+        // Detail pages all show "xxxx-xxxx Premier League" (appTitle + season label),
+        // matching the sidebar — the top title answers "which season's app is this",
+        // while the sidebar already indicates which page you're on.
         .navigationTitle(String(format: UIString.appTitle.text(lang),
                                 SeasonStore.seasonLabel))
         .task(id: appState.refreshNonce) {
-            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
-            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            // Background polling refreshes silently: no full-screen overlay (a flash
+            // every 60 s on matchdays is very disruptive); first load / manual refresh
+            // keep it. isLoading still resets unconditionally so the overlay can never
+            // stick under odd timings.
             if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
@@ -144,7 +151,7 @@ struct StandingsView: View {
         .overlay { if appState.isLoading { LoadingView() } }
     }
 
-    // MARK: tab bar（紧凑，减少垂直空间占用）
+    // MARK: Tab bar (compact, to save vertical space)
 
     @ViewBuilder
     private func tabBar(lang: AppLanguage) -> some View {
@@ -185,7 +192,7 @@ struct StandingsView: View {
         }
     }
 
-    // MARK: 表格卡片（圆角 + 细边框，内嵌 ScrollView 让窗口小时可滚）
+    // MARK: Table card (rounded + hairline border; embedded ScrollView for small windows)
 
     @ViewBuilder
     private func standingsCard(lang: AppLanguage) -> some View {
@@ -193,11 +200,12 @@ struct StandingsView: View {
             content(lang: lang)
         }
         .frame(maxWidth: .infinity)
-        // 卡片改为填满详情区（与今日/赛程一致）：去掉 fixedSize(vertical:true) 后，
-        // standingsCard 接受父级（body VStack 的 maxHeight:.infinity）给的高度，
-        // 圆角背景也跟着铺满整个详情区。
-        // 最后一行被拉伸的 bug 由 detailedTable/formTable 内层 VStack 的
-        // .fixedSize(vertical:true)（StandingsView.swift:192、326）兜底，不在此处处理。
+        // The card fills the detail area (consistent with Today/fixtures): after
+        // removing fixedSize(vertical:true), standingsCard accepts whatever height the
+        // parent (the body VStack's maxHeight:.infinity) offers and the rounded
+        // background covers the whole detail area.
+        // The stretched-last-row bug is handled by the inner VStack's
+        // .fixedSize(vertical:true) in detailedTable/formTable instead.
         .background(
             RoundedRectangle(cornerRadius: cardCornerRadius)
                 .fill(Color.primary.opacity(0.04))
@@ -225,11 +233,11 @@ struct StandingsView: View {
         }
     }
 
-    // MARK: 总/主/客 表格
+    // MARK: Overall / home / away table
 
     @ViewBuilder
     private func detailedTable(lang: AppLanguage) -> some View {
-        // 顶层 ScrollView（非嵌在另一个纵向 ScrollView 内），让窗口小时可滚
+        // Top-level ScrollView (not nested in another vertical one) so small windows scroll
         ScrollView {
             VStack(spacing: 0) {
                 detailedHeader(lang: lang)
@@ -241,11 +249,11 @@ struct StandingsView: View {
                     }
                 }
             }
-            // 关键：VStack 默认会拉伸最后一个 child 填满可用空间。
-            // 窗口越大，剩余空间越多，最后一行（第 20 行）就被拉得越高，
-            // 视觉上"只有最后一行特别高"。
-            // .fixedSize(horizontal:false, vertical:true) 强制 VStack 高度 = 内容之和，
-            // 不让最后一行被拉伸；剩余空间由 ScrollView 自然留白（或内容超出时滚动）。
+            // Key: a VStack stretches its last child to fill available space. The
+            // bigger the window, the taller the last row (row 20) looks — "only the
+            // last row is extra tall". fixedSize(horizontal:false, vertical:true)
+            // forces the VStack's height to the sum of its children; leftover space
+            // stays as scroll-view whitespace (or scrolls when content overflows).
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -271,7 +279,7 @@ struct StandingsView: View {
         }
     }
 
-    /// 表头单元格：略大字体（subheadline），名次列用 56pt 宽度。
+    /// Header cell: slightly larger font (subheadline); 56 pt for the position column.
     private func headerCell(_ text: String, width: CGFloat?, alignment: Alignment = .center) -> some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
@@ -280,16 +288,18 @@ struct StandingsView: View {
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: alignment)
     }
 
-    /// 依名次计算分区底色（按 2026-27 英超真实赛制）：
-    /// 1-5 欧冠、6 欧联、7 协会联赛、18-20 降级；其余无色。
-    /// 用名次硬算而非数据源 status，保证示例 / 赛季初数据下也稳定有底色。
-    /// ⚠️ 契约：入参必须是「总榜名次」。主/客场榜是独立名次，喂进来会得到错色（见 detailedRow）。
+    /// Zone background by position (real 2026-27 PL rules):
+    /// 1-5 Champions League, 6 Europa League, 7 Conference League, 18-20 relegation;
+    /// otherwise clear. Computed from the position rather than the source's status
+    /// field, so sample / early-season data still gets stable colors.
+    /// ⚠️ Contract: the input must be the **overall** position. Home/away tables have
+    /// their own ranks; feeding those yields wrong colors (see detailedRow).
     private func zoneColor(for position: Int) -> Color {
         switch position {
-        case 1...5:   return Color.blue.opacity(0.12)    // 欧冠区
-        case 6:       return Color.orange.opacity(0.12)  // 欧联区
-        case 7:       return Color.green.opacity(0.12)   // 协会联赛区
-        case 18...20: return Color.red.opacity(0.12)     // 降级区
+        case 1...5:   return Color.blue.opacity(0.12)    // Champions League zone
+        case 6:       return Color.orange.opacity(0.12)  // Europa League zone
+        case 7:       return Color.green.opacity(0.12)   // Conference League zone
+        case 18...20: return Color.red.opacity(0.12)     // relegation zone
         default:      return .clear
         }
     }
@@ -320,13 +330,13 @@ struct StandingsView: View {
                 .bold()
         }
         .padding(.vertical, 4)
-        // 分区底色只在「展示名次 = 总榜名次」的 tab 上成立。
-        // 主场/客场榜是各自独立的名次（如某队主场第 1 但总榜第 8），
-        // 用总榜 position 算出来的欧冠/降级底色在那两页是错的，必须置空。
+        // Zone colors only apply when "displayed rank == overall rank". Home/away
+        // tables have independent ranks (a team can be #1 at home but #8 overall);
+        // overall-position-derived CL/relegation colors would be wrong there → clear.
         .background((tab == .overall) ? zoneColor(for: row.position) : .clear)
     }
 
-    /// 4 tab 各自的数据源
+    /// Per-tab stats source.
     private func statsForRow(_ row: StandingRow, tab: StandingsTab) -> RowStatsView {
         switch tab {
         case .overall:
@@ -369,7 +379,7 @@ struct StandingsView: View {
             .monospacedDigit()
     }
 
-    // MARK: 状态 tab 表格（简化：排名 + 球队 + 近 5 场）
+    // MARK: Form tab (simplified: rank + team + last 5)
 
     @ViewBuilder
     private func formTable(lang: AppLanguage) -> some View {
@@ -383,7 +393,7 @@ struct StandingsView: View {
                     }
                 }
             }
-            // 与 detailedTable 同理：避免最后一行被 ScrollView 拉伸
+            // Same as detailedTable: keep the last row from being stretched by the ScrollView
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -419,12 +429,13 @@ struct StandingsView: View {
                 .frame(width: 160, alignment: .center)
         }
         .padding(.vertical, 4)
-        // 状态 tab 沿用主积分榜顺序 → 展示名次就是总榜名次，分区底色成立。
+        // The form tab keeps the main standings order → the displayed rank IS the
+        // overall rank, so zone colors apply.
         .background(zoneColor(for: row.position))
     }
 }
 
-// MARK: - 行内统计的扁平结构（避免 SwiftUI body 中重复解 Optional）
+// MARK: - Flat row stats (avoids repeated optional unwrapping in the SwiftUI body)
 
 private struct RowStatsView {
     let played: Int
@@ -443,12 +454,13 @@ private struct RowStatsView {
     )
 }
 
-// MARK: - 状态 tab 行
+// MARK: - Form tab row
 
-/// 状态 tab 单行：排名 + 球队 + 近 5 场 W/D/L 序列（彩色小胶囊）
+/// Form tab row: rank + team + last-5 W/D/L sequence (colored chips).
 ///
-/// 胶囊尺寸故意与 detailedRow 文字行（`.body` 17pt + padding 6pt = 23pt）对齐：
-/// 18×18 胶囊 + padding 6pt = 24pt，避免状态 tab 卡片比总/主/客三 tab 高一截。
+/// Chip size deliberately matches detailedRow's text rows (`.body` 17 pt + 6 pt
+/// padding = 23 pt): an 18×18 chip + 6 pt padding = 24 pt, so the form tab isn't
+/// taller than the other three.
 struct FormChipsView: View {
     let form: String?
 
@@ -475,7 +487,7 @@ struct FormChipsView: View {
     }
 }
 
-// MARK: - 行内球队小单元（队徽 + 简称）— 保留以便其它视图复用
+// MARK: - Inline team cell (crest + name) — kept for reuse by other views
 
 struct TeamCell: View {
     @Environment(AppState.self) private var appState

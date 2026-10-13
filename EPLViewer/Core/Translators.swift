@@ -1,11 +1,12 @@
 import Foundation
 
-// MARK: - 聚合 / enrichment / 翻译器（wire 模型 → 内部 domain）
+// MARK: - Aggregation / enrichment / translators (wire models → internal domain)
 
-/// 已结束赛事聚合得到的"准实时积分榜"
-/// 关键能力：当 v3 standings records 字段尚未生成时，从已踢完的赛事实时算 W/D/L/Pts/GF/GA。
+/// A "near-live" standings table aggregated from finished events.
+/// Key capability: while ESPN's v3 `records` field is still empty, W/D/L/Pts/GF/GA
+/// are computed live from played matches.
 struct StandingsAggregator {
-    /// 内部条目：teamId + 比分
+    /// Internal per-team accumulator.
     struct RowStat {
         var played: Int = 0
         var won: Int = 0
@@ -17,22 +18,22 @@ struct StandingsAggregator {
         func gd() -> Int { gf - ga }
     }
 
-    /// 拉过去 N 天已结束赛事，统计 W/D/L/Pts/GF/GA，按积分降序
-    /// - 实现：拉 events 列表 → follow 每个赛事（status.state == "post"）→ 统计
-    /// - 缓存：单赛事详情缓存 5 分钟（赛事比分很少变），汇总结果缓存 60 秒（与 standings TTL 对齐）
+    /// Pull finished events from the last N days, tally W/D/L/Pts/GF/GA, sort by points.
+    /// - Implementation: fetch event list → follow each event (status.state == "post") → tally
+    /// - Caching: per-event details cached 5 min (scores rarely change), summary 60 s (aligned with standings TTL)
     static func aggregate(daysBack: Int = 14) async throws -> [StandingRow] {
-        // 1. 计算日期范围
+        // 1. Compute the date range
         let calendar = Calendar(identifier: .gregorian)
         let now = Date()
         guard let start = calendar.date(byAdding: .day, value: -daysBack, to: now) else { return [] }
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd"; df.timeZone = TimeZone(identifier: "UTC")
         let dates = "\(df.string(from: start))-\(df.string(from: now))"
 
-        // 2. 拉赛事 ID
+        // 2. Fetch event IDs
         let eventIds = try await ESPNEventsProvider.fetchEventIds(dates: dates)
         guard !eventIds.isEmpty else { return [] }
 
-        // 3. 并发 follow 单场赛事详情（8 并发足够，避免过度请求）
+        // 3. Follow per-event details concurrently (8 lanes is plenty; avoids excessive requests)
         let details: [ESPNEventDetailV3] = await withTaskGroup(of: ESPNEventDetailV3?.self) { group in
             var results: [ESPNEventDetailV3] = []
             let semaphore = AsyncSemaphore(value: 8)
@@ -49,40 +50,40 @@ struct StandingsAggregator {
             return results
         }
 
-        // 4. 筛选已结束赛事 + 解析 W/D/L（GF/GA 等比分并发拉完后再统一累加）
+        // 4. Filter finished events + parse W/D/L (GF/GA are added after scores arrive)
         var stats: [Int: RowStat] = [:]   // key = ESPN team.id (Int)
-        var teamMeta: [Int: ESPNTeamRefV3] = [:]   // 用于赛后回填 team 详情
-        var finishedPairs: [(eventId: String, homeId: Int, awayId: Int)] = []   // 待补比分的已结束赛事
+        var teamMeta: [Int: ESPNTeamRefV3] = [:]   // for backfilling team details afterwards
+        var finishedPairs: [(eventId: String, homeId: Int, awayId: Int)] = []   // finished events awaiting scores
 
         for detail in details {
             guard let comp = detail.competitions?.first else { continue }
-            // 仅处理已结束赛事：
-            //   v3 单场赛事里 status 字段是 $ref 需要再 follow；这里用更直接的方式：
-            //   任一 competitor.winner 字段不是 nil → 该场已出胜负（draw 时两队 winner 都为 false）
-            //   进行中 / 未开始赛事的 winner 字段均为 nil
+            // Only finished events:
+            //   in a v3 event the status field is a $ref that would need another follow;
+            //   a more direct test: any competitor.winner != nil → the match has a result
+            //   (on a draw both winners are false; live/upcoming events leave winner nil).
             guard let competitors = comp.competitors, competitors.count >= 2 else { continue }
             let hasResult = competitors.contains { $0.winner != nil }
             guard hasResult else { continue }
 
-            // 拿主客（v3 单场赛事里 team 是 $ref；用 competitor.id 即为 team id）
+            // Home/away (in a v3 event `team` is a $ref; competitor.id is the team id)
             let home = competitors.first { $0.homeAway == "home" } ?? competitors[0]
             let away = competitors.first { $0.homeAway == "away" } ?? competitors[1]
             guard let homeId = Int(home.id ?? ""),
                   let awayId = Int(away.id ?? "") else { continue }
 
-            // team ref 用于赛后回填（可选）
+            // Team refs are kept for the later backfill (optional)
             if let h = home.team { teamMeta[homeId] = h }
             if let a = away.team { teamMeta[awayId] = a }
 
-            // 拿 score：competitors.score 经常是 $ref，需要 follow —— 记下本场主客，稍后并发拉取
+            // Scores: competitors.score is usually a $ref — record this fixture, fetch later
             finishedPairs.append((eventId: detail.id ?? "", homeId: homeId, awayId: awayId))
 
-            // 即时统计：先按 winner 算 W/D/L，GF/GA 后续补
+            // Tally W/D/L from winner now; GF/GA are added once scores arrive
             let homeWin = home.winner == true
             let awayWin = away.winner == true
             let draw = (home.winner == false && away.winner == false && home.winner != nil)
 
-            // 拿到 team 后再聚合：每个赛事算主客的两条统计
+            // Two rows per event: home and away
             var hst = stats[homeId] ?? RowStat()
             var ast = stats[awayId] ?? RowStat()
             hst.played += 1
@@ -101,8 +102,9 @@ struct StandingsAggregator {
             stats[awayId] = ast
         }
 
-        // 5. 并发 follow 每场已结束赛事双方的比分（score 在 v3 里是 $ref）。
-        //    原实现在主循环里逐场串行 await —— 一轮 10 场要串行发 20 个请求，慢得离谱。
+        // 5. Follow both competitors' scores for every finished event concurrently
+        //    (score is a $ref in v3). The old implementation awaited serially inside
+        //    the main loop — a 10-match round meant 20 sequential requests, painfully slow.
         var scores: [String: Int] = [:]   // key = "eventId-teamId"
         await withTaskGroup(of: (String, Int).self) { group in
             let semaphore = AsyncSemaphore(value: 8)
@@ -122,8 +124,9 @@ struct StandingsAggregator {
             }
         }
 
-        // 6. 用真实比分**累加** GF/GA（一支球队打了多场，GF/GA 是总和；
-        //    旧实现在这里用 `=` 覆盖，导致 GF/GA 永远只剩最后一场的数字）
+        // 6. **Add** GF/GA from the real scores (a team plays multiple matches; GF/GA
+        //    are totals. The old implementation overwrote with `=`, leaving GF/GA at
+        //    the last match's numbers only.)
         for pair in finishedPairs {
             let hg = scores["\(pair.eventId)-\(pair.homeId)"] ?? 0
             let ag = scores["\(pair.eventId)-\(pair.awayId)"] ?? 0
@@ -135,7 +138,7 @@ struct StandingsAggregator {
             stats[pair.awayId] = ast
         }
 
-        // 7. follow team 详情拿 name/crest（去重，并发）
+        // 7. Follow team details for name/crest (deduplicated, concurrent)
         let teamIds = Array(teamMeta.keys)
         var resolvedTeams: [Int: ESPNTeamRefV3] = [:]
         await withTaskGroup(of: (Int, ESPNTeamRefV3?).self) { group in
@@ -152,7 +155,7 @@ struct StandingsAggregator {
             }
         }
 
-        // 8. 装配 StandingRow
+        // 8. Assemble StandingRows
         let rows: [StandingRow] = stats.map { (teamId, st) in
             let name = resolvedTeams[teamId]?.displayName ?? resolvedTeams[teamId]?.name ?? "Team #\(teamId)"
             let crest = resolvedTeams[teamId]?.logos?.first?.href
@@ -161,7 +164,7 @@ struct StandingsAggregator {
                 crest: crest, venue: nil, founded: nil, coach: nil, squad: nil
             )
             return StandingRow(
-                position: 0,   // 排序后再赋
+                position: 0,   // assigned after sorting
                 team: team,
                 playedGames: st.played, won: st.won, draw: st.draw, lost: st.lost,
                 points: st.points(), goalsFor: st.gf, goalsAgainst: st.ga,
@@ -169,8 +172,9 @@ struct StandingsAggregator {
                 form: nil, status: nil, home: nil, away: nil
             )
         }
-        // 完全同分同净胜球同进球时按 teamId 稳定排序 —— stats 是字典、遍历顺序不定，
-        // 不加最终 tiebreak 的话，两次渲染的行序可能不同
+        // Fully tied on points/GD/GF → order by teamId: `stats` is a dictionary with
+        // unspecified iteration order, so without a final tiebreak two renders could
+        // list rows in different orders.
         let sorted = rows.sorted {
             ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
                 || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
@@ -184,9 +188,10 @@ struct StandingsAggregator {
         }
     }
 
-    /// 从已拉取的赛果（含比分）实时聚合积分榜。
-    /// 复用赛程数据源（scoreboard），避免再走 core/events 的 $ref 链；
-    /// 只统计 status == FINISHED 且含比分的比赛，未参赛球队不会出现、也不会得到积分。
+    /// Aggregate a standings table from already-fetched results (with scores).
+    /// Reuses the fixtures source (scoreboard) instead of the core/events $ref chain;
+    /// only FINISHED matches with scores count — teams yet to play don't appear and
+    /// don't earn points.
     static func aggregate(matches: [Match]) -> [StandingRow] {
         var stats: [Int: RowStat] = [:]
         var teamMeta: [Int: Team] = [:]
@@ -217,8 +222,9 @@ struct StandingsAggregator {
                 goalDifference: st.gd(), form: nil, status: nil, home: nil, away: nil
             )
         }
-        // 完全同分同净胜球同进球时按 teamId 稳定排序 —— stats 是字典、遍历顺序不定，
-        // 不加最终 tiebreak 的话，两次渲染的行序可能不同
+        // Fully tied on points/GD/GF → order by teamId: `stats` is a dictionary with
+        // unspecified iteration order, so without a final tiebreak two renders could
+        // list rows in different orders.
         let sorted = rows.sorted {
             ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
                 || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
@@ -233,23 +239,24 @@ struct StandingsAggregator {
     }
 }
 
-// MARK: - 积分榜 enrichment（home/away 拆分 + form）
+// MARK: - Standings enrichment (home/away split + form)
 
-/// ESPN 现行的 standings API 不直接返回「主场战绩 / 客场战绩」拆分。
-/// 这个模块从已结束的赛程本地聚合：
-/// - `venueStats(for:matches:isHome:)`：算某队主场或客场的 W/D/L/GF/GA/Pts
-/// - `formString(for:matches:last:)`：从最近 N 场完赛推导 W/D/L 序列
-/// - `enrich(rows:with:matches:)`：给一行 StandingRow 补 home/away（仅当原来没值时）
+/// ESPN's current standings API doesn't return home/away splits. This module
+/// aggregates them locally from finished fixtures:
+/// - `venueStats(for:matches:isHome:)`: a team's home or away W/D/L/GF/GA/Pts
+/// - `formString(for:matches:last:)`: W/D/L sequence over the last N finished matches
+/// - `enrich(rows:with:matches:)`: fills home/away (+form) on a row (only when absent)
 ///
-/// 是纯函数（不依赖环境），便于单元测试。
+/// Pure functions (no environment dependencies), easy to unit test.
 struct StandingsEnricher {
 
-    /// 某队在「主场」或「客场」维度下的战绩。
+    /// A team's record in the "home" or "away" dimension.
     /// - Parameters:
-    ///   - teamId: 球队 id
-    ///   - matches: 全部比赛（含未开赛、进行中、已结束；本函数只取已结束 + 有比分的）
-    ///   - isHome: true=仅算主场比赛，false=仅算客场比赛
-    /// - Returns: `nil` 表示「该队在指定维度下没有任何已结束比赛」（UI 区分"无数据"与"踢了但全输"）
+    ///   - teamId: team id
+    ///   - matches: all matches (upcoming, live, finished; only finished + scored count here)
+    ///   - isHome: true = home matches only, false = away matches only
+    /// - Returns: nil means "no finished matches in this dimension" (lets the UI
+    ///   distinguish "no data" from "played but lost everything")
     static func venueStats(for teamId: Int, matches: [Match], isHome: Bool) -> VenueStats? {
         let relevant = matches.filter { m in
             guard m.status == "FINISHED",
@@ -278,17 +285,18 @@ struct StandingsEnricher {
                           goalsFor: gf, goalsAgainst: ga, points: won * 3 + draw)
     }
 
-    /// 从某队最近 N 场已结束比赛推导胜负序列（如 "WWDLW"）。
-    /// - 顺序：从早到晚
-    /// - 没有可统计的比赛 → 返回 nil（不是空串，方便 UI 区分「无数据」与「全胜」）
+    /// Derive the W/D/L sequence (e.g. "WWDLW") over a team's last N finished matches.
+    /// - Order: oldest → newest
+    /// - No countable matches → nil (not an empty string, so the UI can tell
+    ///   "no data" apart from "all wins")
     static func formString(for teamId: Int, matches: [Match], last: Int = 5) -> String? {
         let finished = matches
             .filter { $0.status == "FINISHED"
                 && ($0.homeTeam.id == teamId || $0.awayTeam.id == teamId)
                 && $0.score?.fullTime?.home != nil
                 && $0.score?.fullTime?.away != nil }
-            .sorted { ($0.utcDate ?? "") < ($1.utcDate ?? "") }   // 升序：最早在前
-            .suffix(last)                                          // 取最近 N 场（仍升序）
+            .sorted { ($0.utcDate ?? "") < ($1.utcDate ?? "") }   // ascending: earliest first
+            .suffix(last)                                          // last N (still ascending)
         guard !finished.isEmpty else { return nil }
         return finished.map { m -> String in
             let isHome = m.homeTeam.id == teamId
@@ -302,34 +310,37 @@ struct StandingsEnricher {
         }.joined()
     }
 
-    /// 把外部数据源给的 form 归一成紧凑的 "WWDLW"。
+    /// Normalize a source-provided form string into a compact "WWDLW".
     ///
-    /// 各数据源写法不统一（有的带分隔符 "W,W,D,L,W"、有的带空格或无 D），
-    /// 而 UI 按「前 5 个字符」渲染 —— 不归一会把分隔符当成场次画进胶囊，
-    /// 视觉上就像"状态没有更新"。只保留 W/D/L，去掉其它字符后取最近 5 场。
+    /// Sources write forms differently (some "W,W,D,L,W" with separators, some with
+    /// spaces, some without D), while the UI renders the first 5 characters — without
+    /// normalization separators get drawn as match capsules and the form looks
+    /// "stuck". Keep only W/D/L, drop everything else, keep the last 5.
     static func normalizeForm(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let letters = String(raw.filter { $0 == "W" || $0 == "D" || $0 == "L" })
         return letters.isEmpty ? nil : String(letters.suffix(5))
     }
 
-    /// 用 matches 给 standings 行补全 home/away/form。
-    /// 行为：原有值不覆盖（可能更权威）；没填的用本地聚合补。
-    /// 纯函数；空 rows/空 matches 直接返回原 rows。
+    /// Fill home/away/form on standings rows from matches.
+    /// Existing values are kept (they may be more authoritative); missing values are
+    /// aggregated locally. Pure function; empty rows/matches return rows unchanged.
     static func enrich(rows: [StandingRow], with matches: [Match]) -> [StandingRow] {
         guard !rows.isEmpty else { return rows }
         return rows.map { row in
             let home = row.home ?? venueStats(for: row.team.id, matches: matches, isHome: true)
             let away = row.away ?? venueStats(for: row.team.id, matches: matches, isHome: false)
-            // ⚠️ 必须在这里算 form：ESPN standings 端点不给近 5 场，而 enrich() 原本只补 home/away，
-            // 导致「状态」tab 长期全破折号。已有值先归一化（去分隔符），没有才从赛程推导。
+            // ⚠️ form must be computed here: ESPN's standings endpoint never provides
+            // the last-5 form, and enrich() originally only filled home/away, leaving
+            // the Form tab all dashes forever. Normalize existing values (strip
+            // separators) first; derive from fixtures only when absent.
             let form = normalizeForm(row.form) ?? formString(for: row.team.id, matches: matches)
             return row.with(home: home, away: away, form: form)
         }
     }
 }
 
-/// 简易信号量（控制并发数）
+/// Minimal counting semaphore (bounds concurrency).
 actor AsyncSemaphore {
     private var value: Int
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -349,9 +360,9 @@ actor AsyncSemaphore {
     }
 }
 
-// MARK: - 内部模型翻译器（ESPN/FPL native → 内部 domain）
+// MARK: - Internal model translators (ESPN/FPL wire → internal domain)
 
-/// ESPN 状态名 → 内部统一状态字符串
+/// ESPN status name → internal status string.
 enum StatusTranslator {
     static func translate(_ espnName: String?) -> String {
         switch espnName {
@@ -367,9 +378,9 @@ enum StatusTranslator {
     }
 }
 
-/// FPL bootstrap → 内部 Team / Player / Scorer / Assist / Injury 的派生
+/// FPL bootstrap → internal Team / Player / Scorer / Assist / Injury.
 enum FPLTranslator {
-    /// FPL 球队 id → 内部 Team（含从 elements 派生的 squad）
+    /// FPL team ids → internal Teams (with squads derived from elements).
     static func teams(from bootstrap: FPLBootstrap) -> [Team] {
         let positionMap = Dictionary(
             uniqueKeysWithValues: bootstrap.element_types.map { ($0.id, $0.singular_name) }
@@ -382,8 +393,8 @@ enum FPLTranslator {
                     id: fplPlayer.id,
                     name: fplPlayer.web_name,
                     position: positionMap[fplPlayer.element_type],
-                    shirtNumber: nil,                 // FPL 无号码
-                    nationality: nil                  // FPL 无国籍（需另调 element-summary，留待 v2）
+                    shirtNumber: nil,                 // FPL has no shirt numbers
+                    nationality: nil                  // FPL has no nationality (needs element-summary; deferred)
                 )
             }
             return Team(
@@ -391,21 +402,20 @@ enum FPLTranslator {
                 name: fplTeam.name,
                 shortName: fplTeam.short_name,
                 crest: "https://resources.premierleague.com/premierleague/badges/50/t\(fplTeam.code).png",
-                venue: nil,                          // FPL 无球场
+                venue: nil,                          // FPL has no venue data
                 founded: nil,
-                coach: nil,                          // FPL 无教练
+                coach: nil,                          // FPL has no coach data
                 squad: players
             )
         }
     }
 
-    /// 球队 id 查找（含 squad）
+    /// Team lookup by id (with squad).
     static func team(id: Int, from bootstrap: FPLBootstrap) -> Team? {
         teams(from: bootstrap).first { $0.id == id }
     }
 
-    /// 射手榜（按 goals_scored 降序，展示所有进球球员）
-    /// 射手榜（按 goals_scored 降序；limit>0 时截前 N 名）
+    /// Top scorers (goals_scored descending; top N when limit > 0).
     static func scorers(from bootstrap: FPLBootstrap, limit: Int = 0) -> [Scorer] {
         let teamById = Dictionary(uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0) })
         let all = bootstrap.elements
@@ -428,7 +438,7 @@ enum FPLTranslator {
         return limit > 0 ? Array(all.prefix(limit)) : all
     }
 
-    /// 助攻榜（按 assists 降序；limit>0 时截前 N 名）
+    /// Top assists (assists descending; top N when limit > 0).
     static func assists(from bootstrap: FPLBootstrap, limit: Int = 0) -> [Assist] {
         let teamById = Dictionary(uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0) })
         let all = bootstrap.elements
@@ -450,7 +460,7 @@ enum FPLTranslator {
         return limit > 0 ? Array(all.prefix(limit)) : all
     }
 
-    /// 伤停榜（status != "a"）
+    /// Injuries (status != "a").
     static func injuries(from bootstrap: FPLBootstrap) -> [Injury] {
         let teamById = Dictionary(uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0) })
         let positionMap = Dictionary(
@@ -475,7 +485,7 @@ enum FPLTranslator {
             }
     }
 
-    /// 赛程（从 FPL fixtures 派生，自带轮次 event、真实比分、官方队徽）
+    /// Fixtures derived from FPL fixtures (gameweek, real scores, official crests).
     static func matches(from fixtures: [FPLFixture], teams: [FPLTeam]) -> [Match] {
         let teamById = Dictionary(uniqueKeysWithValues: teams.map { ($0.id, $0) })
         return fixtures.compactMap { f in
@@ -485,19 +495,21 @@ enum FPLTranslator {
             let away = Team(id: a.id, name: a.name, shortName: a.short_name,
                             crest: fplCrest(a.code), venue: nil, founded: nil, coach: nil, squad: nil)
             let hasScore = f.team_h_score != nil && f.team_a_score != nil
-            // 「已结束」的权威判定，三选一即可，避免 FPL 翻转 finished 前的滞后
-            // 把已结束比赛误判为进行中（导致 ⚽ 误显示）：
-            //   1) finished 真正置位；
-            //   2) finished_provisional：FPL 终场即置，且不会在中场/进行中误触发（最可靠）；
-            //   3) minutes >= 90：分钟数兜底。
-            // 仅当「未结束且已开球且未满 90 分钟」才保持 IN_PLAY，由 UI 加 ⚽ 标识区分进行中 / 已结束。
+            // Authoritative "finished" test — any one of three signals, guarding against
+            // FPL's lag in flipping `finished` (which would show ⚽ on finished matches):
+            //   1) finished actually set;
+            //   2) finished_provisional: set at full time, never fires mid-match (most reliable);
+            //   3) minutes >= 90: minutes-based fallback.
+            // Only "not finished + started + under 90 minutes" stays IN_PLAY; the UI adds
+            // ⚽ to distinguish live from finished.
             let over = f.finished
                     || f.finished_provisional == true
                     || (f.minutes ?? 0) >= 90
             let status: String = over ? "FINISHED"
                             : (f.started == true ? "IN_PLAY" : "SCHEDULED")
-            // 有比分就填充（不仅限于已结束）：进行中也能显示实时比分，
-            // 由 FixturesView 通过 status == IN_PLAY 加 ⚽ 标识区分「进行中 / 已结束」
+            // Fill the score whenever present (not only when finished): live matches
+            // show real-time scores too; FixturesView uses status == IN_PLAY + ⚽ to
+            // distinguish live from finished.
             let score: Score? = hasScore
                 ? Score(fullTime: FullTime(home: f.team_h_score!, away: f.team_a_score!))
                 : nil
@@ -507,35 +519,38 @@ enum FPLTranslator {
         }
     }
 
-    /// FPL 球队 code → 官方队徽 URL
+    /// FPL team code → official crest URL.
     private static func fplCrest(_ code: Int) -> String {
         "https://resources.premierleague.com/premierleague/badges/50/t\(code).png"
     }
 }
 
-/// ESPN standings → 内部 StandingRow 列表
-/// 适配 v3 core API：顶层 standings 数组，每项含 records 与 stats；
-/// 赛季初（8 月底）records 可能为空，调用方对空 result 做兜底。
+/// ESPN standings → internal StandingRows.
+/// Adapts the v3 core API: a top-level standings array whose entries carry records
+/// and stats; early in the season `records` may be empty — callers fall back on
+/// empty results.
 enum ESPNTranslator {
-    /// 老 v2 模型（保留为兼容 fallback）
+    /// Legacy v2 model (kept as a compatibility fallback).
     static func standingRows(from resp: ESPNStandingsResponse) -> [StandingRow] {
         let entries = resp.children?.first?.standings.entries ?? []
         return translateStandingsV2(entries: entries)
     }
 
-    /// 新 v3 core 模型
+    /// New v3 core model.
     static func standingRows(from resp: ESPNStandingsCoreResponse) -> [StandingRow] {
         guard resp.standings.count > 0 else { return [] }
-        // 赛季初 records 为空时，把 entries 按 rank/appearance 渲染成 zero-data rows
-        // ——Repository 看到空 rows 会再回退本地 JSON；如果用户愿意看"20队已列出但当前积分暂未填"，可以保留。
+        // When records are empty early in the season we could render zero-data rows
+        // by rank; returning [] instead lets the repository fall back (fixture
+        // aggregation / stale cache), which is more useful than an empty table.
         let hasAnyRecords = resp.standings.contains { ($0.records?.isEmpty == false) }
-        if !hasAnyRecords { return [] }   // 真空 → 触发 Repository 回退本地
+        if !hasAnyRecords { return [] }   // truly empty → trigger the repository fallback
 
         return resp.standings.enumerated().map { (idx, entry) in
             translateV3Entry(idx: idx, entry: entry)
         }
-        // 积分 → 净胜球 → 进球 降序；完全同分时按 ESPN rank 稳定住顺序 ——
-        // 否则两次取数之间同分行可能互换，列表顺序与显示的名次对不上。
+        // Points → GD → GF descending; fully tied rows are pinned by ESPN rank —
+        // otherwise tied rows could swap between fetches and disagree with the
+        // displayed position.
         .sorted {
             ($0.points, $0.goalDifference, $0.goalsFor) > ($1.points, $1.goalDifference, $1.goalsFor)
                 || ($0.points, $0.goalDifference, $0.goalsFor) == ($1.points, $1.goalDifference, $1.goalsFor)
@@ -543,7 +558,7 @@ enum ESPNTranslator {
         }
     }
 
-    /// v2 entries 翻译（沿用原逻辑）
+    /// v2 entries translation (original logic).
     private static func translateStandingsV2(entries: [ESPNStandingEntry]) -> [StandingRow] {
         let rows: [StandingRow] = entries.enumerated().map { (idx, entry) in
             let team = Team(
@@ -584,11 +599,12 @@ enum ESPNTranslator {
         }
     }
 
-    /// 稳定的字符串 → 正整数散列（FNV-1a 64bit，对 Int.max 取模）。
+    /// Stable string → positive integer hash (FNV-1a 64-bit, modulo Int.max).
     ///
-    /// Swift 的 `String.hashValue` 带随机种子，**每次进程启动都不同** —— 用它派生实体 id，
-    /// 同一球队/比赛两次启动 id 就会变，缓存比对、SwiftUI ForEach diff 全部错乱。
-    /// ESPN 的 id / $ref URL 字符串本身是稳定的，用 FNV 散列得到跨启动一致的替代 id。
+    /// Swift's `String.hashValue` is seeded per process and **differs on every
+    /// launch** — deriving entity ids from it would change ids across launches and
+    /// break cache comparisons and SwiftUI ForEach diffing. ESPN's ids / $ref URLs
+    /// are stable strings, so FNV yields a launch-stable substitute id.
     static func stableID(from string: String) -> Int {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in string.utf8 {
@@ -598,7 +614,7 @@ enum ESPNTranslator {
         return Int(hash % UInt64(Int.max))
     }
 
-    /// 单条 v3 entry → StandingRow
+    /// One v3 entry → StandingRow.
     private static func translateV3Entry(idx: Int, entry: ESPNStandingEntryV3) -> StandingRow {
         let teamRef = entry.team
         let team = Team(
@@ -608,7 +624,7 @@ enum ESPNTranslator {
             crest: teamRef.logos?.first?.href,
             venue: nil, founded: nil, coach: nil, squad: nil
         )
-        // 解析 records（按 name 取数）+ 顶层 stats
+        // Parse records (by name) + top-level stats
         var played = 0, won = 0, draw = 0, lost = 0
         var points = 0, gf = 0, ga = 0
         let allRecords = entry.records ?? []
@@ -636,7 +652,7 @@ enum ESPNTranslator {
         )
     }
 
-    /// 把 ESPN note description 映射成 PRD 约定的 status
+    /// Map an ESPN zone note description onto the app's status vocabulary.
     private static func mapZone(_ desc: String) -> String {
         let d = desc.uppercased()
         if d.contains("CHAMPIONS") { return "CHAMPIONS_LEAGUE" }
@@ -646,7 +662,7 @@ enum ESPNTranslator {
     }
 
 
-    /// ESPN scoreboard/schedule → 内部 Match 列表
+    /// ESPN scoreboard/schedule → internal Matches.
     static func matches(from resp: ESPNScoreboardResponse) -> [Match] {
         let events = resp.events ?? []
         return events.compactMap { event -> Match? in
@@ -691,15 +707,15 @@ enum ESPNTranslator {
         }
     }
 
-    /// v3 events 单场详情 → 内部 Match
-    /// 注意：v3 单场赛事里 competitors[].team 只有 id + $ref，没有 name/crest
-    ///   → 这里只用 id + 一个 placeholder name，UI 列表里不展开详情即可
+    /// A v3 event detail → internal Match.
+    /// Note: in a v3 event, competitors[].team carries only id + $ref — no name/crest
+    /// → only id + a placeholder name here; list UIs don't expand details.
     static func match(from detail: ESPNEventDetailV3) -> Match? {
         guard let comp = detail.competitions?.first,
               let competitors = comp.competitors, competitors.count >= 2 else { return nil }
         let home = competitors.first { $0.homeAway == "home" } ?? competitors[0]
         let away = competitors.first { $0.homeAway == "away" } ?? competitors[1]
-        // v3 单场赛事里 competitor.id 即为 team id
+        // In a v3 event, competitor.id is the team id
         let homeId = Int(home.id ?? "0") ?? 0
         let awayId = Int(away.id ?? "0") ?? 0
         let homeTeam = Team(id: homeId, name: "Team #\(homeId)", shortName: nil, crest: nil,
@@ -720,8 +736,8 @@ enum ESPNTranslator {
             status = "SCHEDULED"
         }
 
-        // score 在 v3 单场赛事里仍是 $ref，这里 score 先给 nil；
-        // 已结束赛事的 UI 需要详细比分时会触发 follow score——这里 MVP 暂不展开
+        // score is still a $ref inside a v3 event, so it stays nil here; UIs that need
+        // detailed scores would trigger a score follow — out of scope for now.
         let score: Score? = nil
 
         return Match(

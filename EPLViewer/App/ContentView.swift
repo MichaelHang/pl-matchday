@@ -1,8 +1,8 @@
 import SwiftUI
 
-// MARK: - 主容器（NavigationSplitView）
+// MARK: - Main container (NavigationSplitView)
 
-/// 左侧栏 + 右侧内容的分栏布局
+/// Sidebar + detail split layout.
 struct ContentView: View {
     @Environment(AppState.self) private var appState
 
@@ -17,14 +17,16 @@ struct ContentView: View {
                 .toolbar { TopBar() }
         }
         .navigationSplitViewStyle(.balanced)
-        // ⚠️ 从 UserDefaults 恢复 `autoRefresh == true` 时，SettingsView 里 Toggle 的 `.onChange`
-        // 不会触发（值在视图构造前就已是 true），定时器会漏建 → 出现「UI 显示已开启、但没有
-        // timer」的不一致。这里在根视图出现时补配置一次：true 就建 timer，false 则安全 no-op。
+        // ⚠️ When `autoRefresh == true` is restored from UserDefaults, the Toggle's
+        // `.onChange` in SettingsView never fires (the value was already true before
+        // the view was built) and the timer never gets created → "UI says on but
+        // there is no timer". Configure once when the root view appears: true builds
+        // the timer, false is a safe no-op.
         .task { appState.configureAutoRefresh() }
     }
 }
 
-/// 根据选中板块切换右侧内容
+/// Switches the detail pane based on the selected section.
 struct DetailView: View {
     @Environment(AppState.self) private var appState
 

@@ -1,19 +1,20 @@
 import SwiftUI
 
-// MARK: - 全局应用状态
+// MARK: - Global app state
 
-/// 全局可观察状态（使用 Observation 框架 @Observable）
-/// 标 @MainActor 让所有访问在主 actor 内，避免跨 actor 数据竞争；
-/// SwiftUI 的 .environment() 与 @Environment 在 macOS 26 SDK 下可正常解析。
+/// Global observable state (Observation framework `@Observable`).
+/// `@MainActor` keeps every access on the main actor, avoiding cross-actor data
+/// races; `.environment()` / `@Environment` resolve fine under the macOS 26 SDK.
 @MainActor
 @Observable
 final class AppState {
-    /// 让玩家中文名覆盖层在启动期即 eager 加载（读取磁盘已有覆盖）。可选但稳妥。
+    /// Eagerly loads the player-name override layer at startup (reads any existing
+    /// disk overrides). Optional, but safer.
     init() { let _ = PlayerNameStore.shared }
 
-    /// 主板块枚举
+    /// Main sections.
     enum AppSection: String, CaseIterable, Identifiable {
-        // 顺序即侧边栏显示顺序：今日 → 赛程 → 积分榜 → …
+        // Order = sidebar order: Today → Fixtures → Standings → …
         case today, fixtures, standings, leaders, injuries, settings
         var id: String { rawValue }
 
@@ -40,11 +41,12 @@ final class AppState {
         }
     }
 
-    /// 默认落地页：今日（当天比赛总览，打开 app 第一眼就看到）
+    /// Default landing section: Today (the day's overview; the first thing you see).
     var selected: AppSection = .today
-    /// 当前赛季（写死为 2026-27 赛季；不做赛季切换 UI，避免干扰当前任务）
+    /// Current season (hardcoded 2026-27; no season-switching UI by design).
     var season: String { SeasonStore.currentSeason }
-    /// 界面语言（持久化到 UserDefaults；默认中文，切换即时生效，不触发重新拉数据）
+    /// Interface language (persisted; Chinese by default, switching is immediate and
+    /// does not refetch data).
     var language: AppLanguage =
         AppLanguage(rawValue: UserDefaults.standard.string(forKey: "epl_language") ?? "") ?? .chinese {
         didSet {
@@ -52,24 +54,27 @@ final class AppState {
         }
     }
     var source: DataSource = .sample
-    /// 60s 自动刷新开关（持久化到 UserDefaults；默认关闭）。
-    /// `Bool` 直接读写，key 与既有 `epl_language` / `epl_timezone` 命名一致。
+    /// 60 s auto-refresh switch (persisted; off by default).
+    /// `Bool` is read/written directly; the key follows the existing
+    /// `epl_language` / `epl_timezone` naming.
     var autoRefresh: Bool =
         UserDefaults.standard.bool(forKey: "epl_autorefresh") {
         didSet {
             UserDefaults.standard.set(autoRefresh, forKey: "epl_autorefresh")
         }
     }
-    /// 「比赛期间自动刷新」开关（持久化到 UserDefaults；**默认开启**）。
-    /// 与 `autoRefresh` 互相独立：`autoRefresh` 为开时本项在 UI 上被 disable（全局已 60s，无意义）；
-    /// `autoRefresh` 为关时本项开 → 只在有比赛进行中时 60s 轮询，没比赛则**睡到下一场开球前**
-    /// （见 `AutoRefreshScheduler`）。key 命名与既有 `epl_*` 一致。
+    /// "Auto-refresh during matches" switch (persisted; **on by default**).
+    /// Independent of `autoRefresh`: when the global switch is on, this one is
+    /// disabled in the UI (60 s everywhere makes it moot); when the global switch is
+    /// off and this one is on → poll at 60 s only while a match is live, otherwise
+    /// **sleep until shortly before the next kickoff** (see `AutoRefreshScheduler`).
     ///
-    /// ⚠️ **默认开**：新装、或从未动过这项设置的用户，进来就是勾上状态。
-    /// 所以判定必须用 `object(forKey:) == nil` 走三态，不能直接用 `bool(forKey:)` ——
-    /// 后者对「key 不存在」和「用户显式关掉（已存 false）」**都返回 false**，无法区分，
-    /// 会退化成「永远默认关」或「用户关掉后一重启又被顶回开」。
-    /// 一旦用户拨过开关，`didSet` 立刻写入真值，此后按存值走、不再受默认值影响。
+    /// ⚠️ **On by default**: fresh installs and users who never touched the toggle
+    /// start checked. The tri-state read (`object(forKey:) == nil`) is mandatory —
+    /// `bool(forKey:)` returns false both for "key absent" and "explicitly off",
+    /// which would either force always-off or flip the user's off back to on across
+    /// launches. Once the user moves the toggle, `didSet` persists the real value
+    /// and defaults no longer apply.
     var autoRefreshDuringMatches: Bool =
         AppState.persistedBool(forKey: "epl_autorefresh_matches", defaultWhenAbsent: true) {
         didSet {
@@ -77,44 +82,52 @@ final class AppState {
         }
     }
 
-    /// 读取持久化的 Bool，并把「key 不存在」与「存了 false」区分开（见 `autoRefreshDuringMatches`）。
-    /// 静态成员不参与 `@Observable` 的属性观察（只有实例存储属性才会被宏改写），因此这里安全。
+    /// Reads a persisted Bool, distinguishing "key absent" from "stored false"
+    /// (see `autoRefreshDuringMatches`). Static members don't participate in
+    /// `@Observable` observation (only instance stored properties are rewritten by
+    /// the macro), so this is safe.
     private static func persistedBool(forKey key: String, defaultWhenAbsent: Bool) -> Bool {
         guard UserDefaults.standard.object(forKey: key) != nil else { return defaultWhenAbsent }
         return UserDefaults.standard.bool(forKey: key)
     }
     var isLoading: Bool = false
-    /// 赛程展示时区（持久化到 UserDefaults；默认北京时间，切换即时生效）
+    /// Display time zone for fixtures (persisted; Beijing by default, immediate switch).
     var timeZone: DisplayTimeZone =
         DisplayTimeZone(rawValue: UserDefaults.standard.string(forKey: "epl_timezone") ?? "") ?? .shanghai {
         didSet {
             UserDefaults.standard.set(timeZone.rawValue, forKey: "epl_timezone")
         }
     }
-    /// 刷新计数：自增即可触发各视图的 .task(id:) 重新拉取
+    /// Refresh counter: incrementing it re-triggers every view's `.task(id:)` refetch.
     var refreshNonce: Int = 0
-    /// 60s 自动刷新定时器（开启时定期调用 refresh()，用于比赛期间实时比分）
-    /// 用 @ObservationIgnored 避免 Observation 框架试图追踪 Timer 引用
+    /// 60 s auto-refresh timer (polls `refresh()` for live scores during matches).
+    /// `@ObservationIgnored` keeps the Observation framework from tracking the Timer.
     @ObservationIgnored
     private var refreshTimer: Timer?
 
-    /// 最近一次由视图回报的调度状态（是否有比赛进行中 / 下一场开球时间）。
-    /// 由 `reportLiveSchedule(from:)` / `refreshTick()` 按当前时刻**现算**，驱动 `configureAutoRefresh()`。
+    /// The schedule state last reported by a view (live match? next kickoff?).
+    /// Recomputed **against the current time** by `reportLiveSchedule(from:)` /
+    /// `refreshTick()`; drives `configureAutoRefresh()`.
     var liveSchedule = RefreshSchedule(hasLiveMatch: false, nextKickoff: nil)
-    /// 最近一次已知的全量赛程。定时器每次唤醒时用它 + 当前时刻**重新**算 schedule ——
-    /// 因为 schedule 依赖 `now`，只看存下来的 `liveSchedule` 是不够的（见 `refreshTick`）。
-    /// 全量数组是 COW 值语义，这里只是持有引用，不额外占内存。
+    /// The latest known full fixture list. The timer recomputes the schedule from it
+    /// plus the current time on every wake — the schedule depends on `now`, so the
+    /// stored `liveSchedule` alone is not enough (see `refreshTick`). Arrays are COW
+    /// value types; this only holds a reference, no extra copying.
     var lastKnownMatches: [Match] = []
 
-    /// 主动刷新：默认「全量」—— 清空所有本地缓存后自增 refreshNonce，各视图重拉必走网络，
-    /// 不受 CacheTTL「懒刷新」阈值约束（被动取数如切 tab / 启动不清除缓存，遵循 5 分钟窗口）。
+    /// Manual refresh: default "full" — clears every local cache, bumps
+    /// `refreshNonce`, so all views refetch over the network, unconstrained by the
+    /// lazy CacheTTL window (passive fetches like tab switches keep the 5 min window).
     ///
-    /// `scoresOnly: true` 供「比赛期间自动刷新」定时器专用：只失效**赛程**缓存（比分来源），
-    /// 保留 bootstrap / 积分榜等其它缓存，避免每 60s 重下整份 FPL bootstrap。
-    /// UI 实时性不变（比分只来自赛程），但每 60s 网络开销从 3 份降到 1 份。
+    /// `scoresOnly: true` is for the live-match polling timer: invalidates only the
+    /// **fixtures** cache (the scores source) and keeps bootstrap / standings etc.,
+    /// so each 60 s tick doesn't re-download the whole FPL bootstrap. UI freshness
+    /// is unchanged (scores come from fixtures only); per-minute network cost drops
+    /// from 3 payloads to 1.
     func refresh(scoresOnly: Bool = false) async {
-        // 记录本次 nonce 自增的来源：视图在 .task(id:) 开始时读取一次，
-        // 后台轮询静默刷新（不亮遮罩），手动刷新照常遮罩。都在主 actor 上，无竞态。
+        // Record this nonce bump's origin: views read it once at `.task(id:)` start —
+        // background polling refreshes silently (no overlay), manual refresh keeps
+        // the overlay. Main-actor only, no races.
         lastRefreshSource = scoresOnly ? .background : .manual
         if scoresOnly {
             await DataRepository.invalidateFixtures()
@@ -124,20 +137,23 @@ final class AppState {
         refreshNonce &+= 1
     }
 
-    /// 刷新来源：决定各视图这次 reload 要不要亮全屏加载遮罩。
-    /// - initial: 冷启动 / 首次进入某板块（nonce 未变）→ 照常遮罩；
-    /// - manual: 用户点刷新 / 清缓存 → 照常遮罩（有明确的等待预期）；
-    /// - background: 比赛日 60s 自动轮询（scoresOnly）→ **静默**刷新，
-    ///   比分原地更新即可 —— 否则每 60s 全屏遮罩闪一次，非常干扰。
+    /// Refresh origin: decides whether this reload shows the full-screen overlay.
+    /// - initial: cold launch / first entry into a section (nonce unchanged) → overlay;
+    /// - manual: user tapped refresh / cleared cache → overlay (explicit wait expected);
+    /// - background: matchday 60 s polling (scoresOnly) → **silent** refresh, scores
+    ///   update in place — a flashing overlay every 60 s is very disruptive otherwise.
     enum RefreshSource { case initial, manual, background }
     @ObservationIgnored private(set) var lastRefreshSource: RefreshSource = .initial
 
-    /// 重建自动刷新定时器。间隔由 `AutoRefreshScheduler.refreshInterval(...)` 决定：
-    /// - 全局 `autoRefresh == true` → 固定 60s；
-    /// - 否则「比赛期间」开且有比赛进行中 → 60s；
-    /// - 否则没比赛 → 睡到下一场开球前（提前 15 分钟），无赛程则 `maxIdleSleep` 兜底；
-    /// - 「比赛期间」关 → 不设定时器。
-    /// 由 SettingsView 的 Toggle `.onChange`、ContentView 的 `.task`、`reportLiveSchedule(from:)` 调用。
+    /// Rebuilds the auto-refresh timer. The interval comes from
+    /// `AutoRefreshScheduler.refreshInterval(...)`:
+    /// - global `autoRefresh == true` → fixed 60 s;
+    /// - otherwise "during matches" on + a live match → 60 s;
+    /// - otherwise sleep until 15 min before the next kickoff; with no schedule, fall
+    ///   back to `maxIdleSleep`;
+    /// - "during matches" off → no timer.
+    /// Called by SettingsView's Toggle `.onChange`, ContentView's `.task`, and
+    /// `reportLiveSchedule(from:)`.
     @MainActor
     func configureAutoRefresh() {
         refreshTimer?.invalidate()
@@ -149,8 +165,9 @@ final class AppState {
             now: Date()
         )
         guard let interval else { return }
-        // tick 每次唤醒做两件事：刷新数据 + **按当前时刻重算间隔**（见 `refreshTick()`）。
-        // 重算必须发生在 tick 里 —— 原因见 `refreshTick()` 的注释（这是本功能唯一目标场景的命门）。
+        // Each tick does two things: refresh data + **recompute the interval against
+        // the current time** (see `refreshTick()`). The recompute must happen inside
+        // the tick — see its doc comment (it's the crux of this feature).
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { await self?.refreshTick() }
         }
@@ -158,41 +175,50 @@ final class AppState {
         refreshTimer = timer
     }
 
-    /// 定时器每次唤醒：刷新数据 → **按当前时刻重算 schedule 与间隔** → 重建定时器。
+    /// Timer wake: refresh data → **recompute schedule & interval against now** → rebuild the timer.
     ///
-    /// ⚠️ 必须**无条件**重算（不能只靠 `reportLiveSchedule` 那种「内容变了才重建」的去抖），
-    /// 有两个独立理由，踩过两次：
+    /// ⚠️ The recompute must be **unconditional** (not the "only rebuild when content
+    /// changed" debounce of `reportLiveSchedule`), for two independently-discovered
+    /// reasons (each bit us once):
     ///
-    /// 1. **间隔随 `now` 单调不增，但 schedule 内容可能不变**。
-    ///    「睡到开球前 15 分钟」醒来时，schedule 内容与睡前**完全相同**（`hasLiveMatch` 仍 false、
-    ///    `nextKickoff` 仍是同一场）→ 基于内容比较的去抖会早退 → 继续按旧的 6300s 睡下去，
-    ///    **直接睡过整场比赛**（要到开球后 90 分钟才醒）。
-    /// 2. **`hasLiveMatch` 是按开球时间窗判定的，必须重算才会随时间演进**。
-    ///    `RefreshSchedule.hasLiveMatch` 只是个存储 Bool，**不会自己翻转**。若停在不上报赛程的
-    ///    tab（积分榜 / 设置 / 球员榜 / 伤停），`liveSchedule` 会被冻结；不重算的话，
-    ///    比赛全部结束后仍会**永久保持 60s 轮询**（清缓存 + 重拉 + 转圈），浪费网络与电量。
+    /// 1. **The interval shrinks monotonically with `now`, but the schedule content
+    ///    may not change.** Waking "15 min before kickoff" finds the exact same
+    ///    schedule (`hasLiveMatch` still false, same `nextKickoff`) → a content-based
+    ///    debounce would early-return → keep sleeping the old 6300 s and **sleep
+    ///    through the entire match** (waking 90 min after kickoff).
+    /// 2. **`hasLiveMatch` is derived from the kickoff-time window and only advances
+    ///    when recomputed.** `RefreshSchedule.hasLiveMatch` is a stored Bool that
+    ///    **never flips by itself**. Parked on a tab that doesn't report schedules
+    ///    (standings / settings / leaders / injuries), `liveSchedule` freezes; without
+    ///    a recompute the app would poll at 60 s **forever** after all matches ended
+    ///    (clear cache + refetch + spinners), wasting network and battery.
     ///
-    /// 用「可能过期的 `lastKnownMatches`」重算是安全且**故意**的：
-    /// `untilWake = nextKickoff − now − kickoffLeadTime` 随 `now` **单调不增** ⇒
-    /// 重算出的间隔**永不比上次更长**（下限被 `liveInterval` 兜住，不会退化成 0 / 负数导致密集触发），
-    /// 所以只会「提前醒」不会「睡过头」。
+    /// Recomputing from a possibly stale `lastKnownMatches` is safe and **intentional**:
+    /// `untilWake = nextKickoff − now − kickoffLeadTime` is **monotonically
+    /// non-increasing** in `now` ⇒ the recomputed interval never grows longer than the
+    /// previous one (floored by `liveInterval`, so it never degenerates into
+    /// 0/negative rapid-fire) — you may wake early, never oversleep.
     private func refreshTick() async {
-        // 比赛期间轮询：只刷新赛程（比分来源），不清整份 bootstrap / 积分榜（见 refresh(scoresOnly:)）。
+        // Live polling: refresh fixtures only (the scores source); don't clear the
+        // whole bootstrap / standings (see refresh(scoresOnly:)).
         await refresh(scoresOnly: true)
         liveSchedule = AutoRefreshScheduler.schedule(matches: lastKnownMatches, now: Date())
         configureAutoRefresh()
     }
 
-    /// 由视图取数后回报**最新赛程**；AppState 自行按当前时刻算 schedule，内容没变则 no-op（去抖）。
+    /// Views report the **latest fixtures** after fetching; AppState computes the
+    /// schedule against the current time itself and no-ops when unchanged (debounce).
     ///
-    /// ⚠️ 传的是 `matches` 而不是现成的 `RefreshSchedule`：因为 schedule 依赖 `now`，
-    /// 必须让 AppState 自己现算，才能与 `refreshTick()` 的重算保持同一套逻辑
-    /// （否则「睡到开球前」的间隔演进会退化成只在视图回报时才更新）。
+    /// ⚠️ Passes `matches`, not a ready `RefreshSchedule`: the schedule depends on
+    /// `now`, so AppState must compute it here to share one logic path with
+    /// `refreshTick()`'s recompute (otherwise the "sleep until kickoff" evolution
+    /// would only advance when a view happens to report).
     ///
-    /// ⚠️ 该去抖只覆盖「视图回报」这条路径；定时器唤醒后的演进由 `refreshTick()` **无条件**重算，
-    /// 不受此早退影响（两个独立理由见 `refreshTick` 注释）。
-    /// 说明：`AppState` 实为 `@MainActor` 类（类级标注），显式 `@MainActor` 属冗余但无害，保留以示意图。
-    /// 调用点都在主线程（视图 `.task`）。
+    /// ⚠️ The debounce covers only the "view report" path; timer wakes evolve via
+    /// `refreshTick()`, which recomputes **unconditionally** and is unaffected by
+    /// this early return (two independent reasons in `refreshTick`'s doc comment).
+    /// Note: `AppState` is already a `@MainActor` class (class-level attribute), so
+    /// the explicit `@MainActor` here is redundant but harmless.
     @MainActor
     func reportLiveSchedule(from matches: [Match]) {
         lastKnownMatches = matches

@@ -1,12 +1,13 @@
 import SwiftUI
 import AppKit
 
-// MARK: - 通用视图
+// MARK: - Shared views
 
-/// 加载中视图
-/// 注意：不要在 VStack 自拉伸容器上叠 .glassEffect()。
-///   macOS 26 SDK 下会把整棵子树撑成巨大椭圆，曾出现"进入主板块瞬间闪一下大圆"的视觉 bug。
-///   玻璃质感改用 .background(.ultraThinMaterial)，已经够看，且不会撑大容器。
+/// Loading view.
+/// Note: never stack .glassEffect() on a self-sizing container like a VStack.
+///   Under the macOS 26 SDK it inflates the whole subtree into a giant oval (once
+///   produced a "big circle flashing when entering a section" bug). For glass, use
+///   .background(.ultraThinMaterial) — looks fine and never inflates the container.
 struct LoadingView: View {
     @Environment(AppState.self) private var appState
     var body: some View {
@@ -22,7 +23,7 @@ struct LoadingView: View {
     }
 }
 
-/// 空状态视图
+/// Empty-state view.
 struct EmptyStateView: View {
     let label: String
     var body: some View {
@@ -37,7 +38,7 @@ struct EmptyStateView: View {
     }
 }
 
-/// 错误视图
+/// Error view.
 struct ErrorView: View {
     @Environment(AppState.self) private var appState
     let message: String
@@ -59,10 +60,10 @@ struct ErrorView: View {
     }
 }
 
-// MARK: - 队徽图片（带本地磁盘缓存）
+// MARK: - Crest image (with on-disk cache)
 
-/// 队徽本地缓存：首次从 URL 下载后落盘到 Application Support/EPLViewer/logos/，
-/// 之后直接从本地文件加载，避免每次刷新都重新下载（也支持离线后展示）。
+/// Crest cache: downloaded once, persisted to Application Support/EPLViewer/logos/,
+/// then loaded from disk — no re-downloads on refresh, works offline too.
 actor LogoCache {
     static let shared = LogoCache()
 
@@ -78,13 +79,13 @@ actor LogoCache {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
-    /// 把 URL 转成安全的文件名（只保留字母数字）
+    /// URL → safe file name (alphanumerics only).
     private func fileName(_ urlString: String) -> String {
         urlString.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
     }
 
-    /// 返回队徽的 PNG/JPG 二进制（优先内存 → 磁盘 → 网络下载并落盘）
-    /// 返回 Data（Sendable），由调用方在主线程构造 NSImage
+    /// Crest binary (memory → disk → network download + persist).
+    /// Returns Data (Sendable); the caller builds the NSImage on the main thread.
     func imageData(for urlString: String) async -> Data? {
         let name = fileName(urlString)
         if let cached = memory.object(forKey: name as NSString) { return cached as Data }
@@ -96,9 +97,9 @@ actor LogoCache {
         }
         guard let url = URL(string: urlString) else { return nil }
         do {
-            // 用收紧过超时的会话：队徽是锦上添花，绝不能拖慢列表渲染
+            // Tight-timeout session: crests are nice-to-have and must never slow the list.
             let (data, _) = try await APIClient.imageSession.data(from: url)
-            // 校验确实是图片，避免把错误页缓存下来
+            // Verify it really is an image so error pages never get cached.
             guard NSImage(data: data) != nil else { return nil }
             memory.setObject(data as NSData, forKey: name as NSString)
             try? data.write(to: file, options: .atomic)
@@ -109,16 +110,17 @@ actor LogoCache {
     }
 }
 
-/// 队徽图片：优先从本地缓存读取，未命中再下载并落盘。
+/// Crest image: disk cache first, then download and persist.
 struct CrestImage: View {
     let urlString: String?
-    /// 渲染尺寸（pt）。默认 20（列表行内统一尺寸）；大图场景（推荐比赛卡）显式传更大的值。
-    /// ⚠️ 尺寸必须在这里定：外层再套 `.frame()` 只会把固定大小的子视图居中，放不大。
+    /// Render size (pt). Defaults to 20 (list rows); larger scenes (the featured
+    /// match card) pass an explicit value. ⚠️ The size must live here: wrapping this
+    /// view in an outer .frame() only centers the fixed-size child, it can't scale up.
     var size: CGFloat = CrestImage.renderedSize
     @State private var image: NSImage?
 
-    /// 列表行内队徽的默认渲染尺寸（避免某些 NSImage 是竖长比例时被 scaledToFit
-    /// 撑破外层 frame、把整行 HStack 撑高）
+    /// Default crest size for list rows (some NSImages are portrait and would blow
+    /// up the row height through scaledToFit without a fixed frame).
     static let renderedSize: CGFloat = 20
 
     var body: some View {
@@ -136,7 +138,7 @@ struct CrestImage: View {
         }
         .scaledToFit()
         .frame(width: size, height: size)
-        .clipped()  // 强制裁剪：哪怕子 Image 撑破 frame 也只显示 size×size 范围
+        .clipped()  // hard clip: even if the child overflows, only size×size shows
         .task(id: urlString) {
             guard let urlString else { image = nil; return }
             guard let data = await LogoCache.shared.imageData(for: urlString) else { return }
@@ -145,10 +147,10 @@ struct CrestImage: View {
     }
 }
 
-// MARK: - 颜色扩展与品牌色
+// MARK: - Color helpers & brand colors
 
 extension Color {
-    /// 从十六进制字符串构造颜色（支持 #RRGGBB 与 #RRGGBBAA）
+    /// Construct from a hex string (#RRGGBB or #RRGGBBAA).
     init(hex: String) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
@@ -171,8 +173,8 @@ extension Color {
         )
     }
 
-    /// 英超品牌色：深紫
+    /// PL brand purple.
     static let eplPurple = Color(hex: "#37003C")
-    /// 英超品牌色：亮绿（用于数据来源强调）
+    /// PL brand green (for data-source accents).
     static let eplGreen = Color(hex: "#00FF85")
 }

@@ -1,39 +1,43 @@
 import Foundation
 import SwiftUI
 
-// MARK: - 调试期球员中文名覆盖层
+// MARK: - DEBUG player-name override layer
 //
-// 开发者在 DEBUG 面板里可视化编辑球员的中文名；覆盖层持久化到
-// `~/Library/Application Support/<bundleId>/playerNameOverrides.json`，
-// 永不写进仓库。纯函数 `PlayerNameMap.zh(for:)` 通过 `PlayerNameStore.current`
-// 同步读取最新覆盖，从而不需要任何 actor / 异步跳转。
+// Developers edit Chinese player names visually in the DEBUG panel; overrides are
+// persisted to `~/Library/Application Support/<bundleId>/playerNameOverrides.json`
+// and never committed. The pure function `PlayerNameMap.zh(for:)` reads the latest
+// overrides synchronously via `PlayerNameStore.current`, so no actor or async hop
+// is needed.
 
-/// 覆盖层数据：覆盖 `PlayerNameMap.zhById` / `zhByName` 的开发者自定义中文名。
-/// 主键维度 `byId`（FPL element id）优先级最高，次级维度 `byName`（web_name）。
+/// Override data: developer-defined Chinese names overriding
+/// `PlayerNameMap`'s tables. Primary dimension `byId` (FPL element id), secondary
+/// `byName` (web_name).
 struct PlayerNameOverrides: Codable, Equatable {
-    /// 按 FPL element id 覆盖（主键维度，跨赛季/转会稳定，优先级最高）
+    /// Override by FPL element id (primary; stable across seasons/transfers, highest priority)
     var byId: [Int: String] = [:]
-    /// 按 web_name 覆盖（二级维度，碰撞时以最后一个为准）
+    /// Override by web_name (secondary; on collisions the last one wins)
     var byName: [String: String] = [:]
 }
 
-/// 覆盖层存储。
+/// Override storage.
 ///
-/// - 普通 Swift 对象（不挂任何 global actor），保证单测可以直接同步调用。
-/// - 每次 mutation 都会更新静态快照 `current`，供纯解析函数同步读取。
-/// - `ObservableObject` 让 DEBUG 面板的行视图能观察 `overrides` 变化（覆盖徽标等）。
+/// - A plain Swift object (no global actor) so unit tests can call it synchronously.
+/// - Every mutation refreshes the static `current` snapshot for the pure resolver.
+/// - `ObservableObject` lets the DEBUG panel observe `overrides` (override badges).
 final class PlayerNameStore: ObservableObject {
-    /// 同步快照：每次 mutation 更新，供纯函数 `PlayerNameMap.zh(for:)` 同步读取覆盖层。
-    /// 非隔离静态变量，测试里可直接赋值/复位（App 实际只在主线程访问，故用 `nonisolated(unsafe)`）。
+    /// Synchronous snapshot, refreshed on every mutation; read by the pure
+    /// `PlayerNameMap.zh(for:)`. A non-isolated static so tests can assign/reset it
+    /// directly (the app only touches it from the main thread, hence `nonisolated(unsafe)`).
     nonisolated(unsafe) static var current: PlayerNameOverrides = .init()
 
-    /// 单例；首次访问即加载磁盘上已有的覆盖层（文件不存在则保持默认空值）。
+    /// Singleton; first access loads any overrides already on disk (defaults to
+    /// empty when the file doesn't exist).
     nonisolated(unsafe) static let shared = PlayerNameStore()
 
-    /// 当前内存中的覆盖层（等价于 `current`，供 SwiftUI 观察）。
+    /// The in-memory overrides (equivalent to `current`; observable by SwiftUI).
     @Published var overrides = PlayerNameOverrides()
 
-    /// 覆盖层 JSON 落盘路径。
+    /// Where the overrides JSON is persisted.
     private let fileURL: URL
 
     init() {
@@ -47,7 +51,8 @@ final class PlayerNameStore: ObservableObject {
         load()
     }
 
-    /// 若文件存在则解码进 `overrides` 并刷新静态快照；否则保持默认。
+    /// Decode the file into `overrides` and refresh the snapshot when present;
+    /// otherwise keep the defaults.
     func load() {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         guard let data = try? Data(contentsOf: fileURL) else { return }
@@ -56,7 +61,7 @@ final class PlayerNameStore: ObservableObject {
         PlayerNameStore.current = decoded
     }
 
-    /// 创建目录（如需）并把 `overrides` 编码写盘。
+    /// Create the directory if needed and encode `overrides` to disk.
     func save() {
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -64,14 +69,14 @@ final class PlayerNameStore: ObservableObject {
         try? data.write(to: fileURL, options: .atomic)
     }
 
-    /// 用一份完整覆盖层替换并落盘（供全局保存按钮）。
+    /// Replace the whole override layer and persist (global save button).
     func commit(_ overrides: PlayerNameOverrides) {
         self.overrides = overrides
         PlayerNameStore.current = overrides
         save()
     }
 
-    /// 按 id 设置覆盖：空名视为删除该覆盖。
+    /// Set an override by id; an empty name deletes the entry.
     func set(id: Int, name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -83,7 +88,7 @@ final class PlayerNameStore: ObservableObject {
         save()
     }
 
-    /// 按 web_name 设置覆盖：空名视为删除该覆盖。
+    /// Set an override by web_name; an empty name deletes the entry.
     func set(webName: String, name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -95,14 +100,14 @@ final class PlayerNameStore: ObservableObject {
         save()
     }
 
-    /// 删除某 id 的覆盖。
+    /// Delete the override for an id.
     func reset(id: Int) {
         overrides.byId.removeValue(forKey: id)
         PlayerNameStore.current = overrides
         save()
     }
 
-    /// 删除某 web_name 的覆盖。
+    /// Delete the override for a web_name.
     func reset(webName: String) {
         overrides.byName.removeValue(forKey: webName)
         PlayerNameStore.current = overrides

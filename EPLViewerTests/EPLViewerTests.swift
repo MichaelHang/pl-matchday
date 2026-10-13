@@ -1,13 +1,11 @@
 import XCTest
 @testable import EPLViewer
 
-import XCTest
-@testable import EPLViewer
-
-// MARK: - 内联测试夹具（避免 test target 无法访问主 target Bundle.module 资源）
-// 这些 JSON 镜像 Sources/EPLViewer/Resources 中的真实结构，使用与 App 一致的
-// JSONDecoder + .convertFromSnakeCase 解码，用于断言模型字段与 JSON 一一对应。
-// 采用内联字符串而非 Bundle.module，确保测试在 Xcode / `swift test` 下独立可跑。
+// MARK: - Inline test fixtures (the test target can't reach the app target's
+// Bundle.module resources). These JSON strings mirror the shapes of the app's
+// resources and decode with the same JSONDecoder + .convertFromSnakeCase setup the
+// app uses, asserting model fields against the JSON one-to-one. Inline strings
+// (rather than bundle lookups) keep the tests self-contained under Xcode / swift test.
 
 let standingsJSON = """
 {
@@ -81,7 +79,7 @@ let injuriesJSON = """
 }
 """
 
-// FPL bootstrap-static 真实结构子集
+// A realistic subset of FPL bootstrap-static.
 let fplBootstrapJSON = """
 {
   "teams": [
@@ -105,7 +103,7 @@ let fplBootstrapJSON = """
 }
 """
 
-// ESPN standings 真实结构子集
+// A realistic subset of ESPN standings.
 let espnStandingsJSON = """
 {
   "children": [{
@@ -137,7 +135,7 @@ let espnStandingsJSON = """
 }
 """
 
-// ESPN scoreboard 子集
+// A subset of the ESPN scoreboard.
 let espnScoreboardJSON = """
 {
   "events": [
@@ -161,15 +159,15 @@ let espnScoreboardJSON = """
 
 final class EPLViewerTests: XCTestCase {
 
-    // MARK: - 基础占位
+    // MARK: - Basics
 
     func testExample() {
         XCTAssertTrue(true)
     }
 
-    // MARK: - 回退决策（保留）
+    // MARK: - Fallback decisions
 
-    /// 验证回退决策纯函数 shouldFallback 的规则
+    /// Verifies the rules of the shouldFallback pure function.
     func testShouldFallback() {
         XCTAssertTrue(DataRepository.shouldFallback(.noData))
         XCTAssertTrue(DataRepository.shouldFallback(.apiError(429)))
@@ -180,23 +178,24 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertFalse(DataRepository.shouldFallback(.decoding(NSError(domain: "", code: 0))))
     }
 
-    // MARK: - 缓存 TTL（新增）
+    // MARK: - Cache TTL
 
-    /// CacheTTL.isValid 纯函数：mtime 距 now < ttl → true；超过 → false
+    /// CacheTTL.isValid pure function: now - mtime < ttl → true; past it → false.
     func testCacheTTLIsValid() {
         let now = Date()
-        let recent = now.addingTimeInterval(-30)      // 30 秒前
-        let stale  = now.addingTimeInterval(-120)     // 120 秒前
+        let recent = now.addingTimeInterval(-30)      // 30 seconds ago
+        let stale  = now.addingTimeInterval(-120)     // 120 seconds ago
         XCTAssertTrue(CacheTTL.isValid(mtime: recent, ttl: 60, now: now))
         XCTAssertFalse(CacheTTL.isValid(mtime: stale, ttl: 60, now: now))
-        // ttl=2h 时 120s 前仍有效
+        // With ttl = 2h, 120s ago is still valid
         XCTAssertTrue(CacheTTL.isValid(mtime: stale, ttl: 60 * 60 * 2, now: now))
-        // ttl=0 永远无效
+        // ttl = 0 is never valid
         XCTAssertFalse(CacheTTL.isValid(mtime: now, ttl: 0, now: now))
     }
 
-    /// 回归：CacheStore.getStale —— 网络失败时的 stale-if-error 兜底。
-    /// 忽略 TTL 返回上次落盘的数据；TTL 常规路径仍然尊重过期时间；坏文件返回 nil 不抛错。
+    /// Regression: CacheStore.getStale — the stale-if-error fallback for network
+    /// failures. Ignores TTL and returns the last persisted data; the regular TTL
+    /// path still respects expiry; a corrupt file returns nil without throwing.
     func testCacheStoreStaleFallback() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("epl-cachestore-\(UUID().uuidString)", isDirectory: true)
@@ -205,42 +204,44 @@ final class EPLViewerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         await store.set("k", value: Payload(value: 7))
-        // 探测落盘是否真的成功（部分沙箱环境磁盘 IO 被拦截，此时本用例无从验证，跳过）
+        // Probe whether the write actually landed (some sandboxed environments block
+        // disk IO; there's nothing to verify then, so skip)
         guard (try? Data(contentsOf: dir.appendingPathComponent("k.json"))) != nil else {
-            throw XCTSkip("此环境下 CacheStore 无法写盘，跳过 stale 兜底验证")
+            throw XCTSkip("CacheStore cannot write to disk in this environment; skipping the stale-fallback verification")
         }
 
-        // 把 mtime 拨回 2 小时前 → 常规 TTL 路径（ttl=60s）不应命中
+        // Rewind mtime by 2 hours → the regular TTL path (ttl=60s) must miss
         try FileManager.default.setAttributes(
             [.modificationDate: Date().addingTimeInterval(-2 * 3600)],
             ofItemAtPath: dir.appendingPathComponent("k.json").path)
         let fresh: Payload? = await store.get("k", ttl: 60)
-        XCTAssertNil(fresh, "TTL 过期后常规路径不应命中")
+        XCTAssertNil(fresh, "an expired entry must miss the regular path")
 
-        // getStale 忽略 TTL，返回上次数据
+        // getStale ignores TTL and returns the last data
         let stale: Payload? = await store.getStale("k")
-        XCTAssertEqual(stale, Payload(value: 7), "getStale 应忽略 TTL 返回过期缓存")
+        XCTAssertEqual(stale, Payload(value: 7), "getStale ignores TTL and serves the expired cache")
 
-        // 文件损坏 → 返回 nil，不抛错
+        // Corrupt file → nil, no throw
         try Data("not json".utf8).write(to: dir.appendingPathComponent("k.json"))
         let broken: Payload? = await store.getStale("k")
-        XCTAssertNil(broken, "损坏的缓存文件应静默返回 nil")
+        XCTAssertNil(broken, "a corrupt cache file returns nil silently")
 
-        // key 不存在 → nil
+        // Missing key → nil
         let missing: Payload? = await store.getStale("nope")
         XCTAssertNil(missing)
     }
 
-    // MARK: - 内部模型解码（保留）
+    // MARK: - Internal model decoding
 
-    /// 复用 App 的 snake_case 解码配置（用于内部 domain 模型）
+    /// Reuses the app's snake_case decoding setup (for internal domain models).
     func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
     }
 
-    /// 用于 ESPN/FPL 原生类型：Swift 字段已经是 snake_case，不需要转换
+    /// For ESPN/FPL native types: the Swift fields are already snake_case — no
+    /// conversion needed.
     func makeNativeDecoder() -> JSONDecoder {
         JSONDecoder()
     }
@@ -248,20 +249,20 @@ final class EPLViewerTests: XCTestCase {
     func testStandingsDecoding() throws {
         let response = try makeDecoder().decode(StandingsResponse.self, from: Data(standingsJSON.utf8))
         let table = response.standings.first?.table ?? []
-        XCTAssertEqual(table.count, 8, "积分榜 table 应为 8 行")
-        XCTAssertEqual(table.first?.position, 1, "首行 position 应为 1")
+        XCTAssertEqual(table.count, 8, "the standings table should have 8 rows")
+        XCTAssertEqual(table.first?.position, 1, "the first row's position should be 1")
         for i in 1..<table.count {
-            XCTAssertGreaterThanOrEqual(table[i - 1].points, table[i].points, "积分应降序")
+            XCTAssertGreaterThanOrEqual(table[i - 1].points, table[i].points, "points should descend")
         }
         XCTAssertEqual(table.first?.team.id, 65)
         XCTAssertEqual(table.first?.team.shortName, "Man City")
-        XCTAssertNil(table[4].status, "status:null 应解码为 nil")
+        XCTAssertNil(table[4].status, "status:null should decode as nil")
         XCTAssertEqual(table[0].status, "CHAMPIONS_LEAGUE")
     }
 
     func testTeamsDecoding() throws {
         let response = try makeDecoder().decode(TeamsResponse.self, from: Data(teamsJSON.utf8))
-        XCTAssertEqual(response.teams.count, 8, "球队应为 8 支")
+        XCTAssertEqual(response.teams.count, 8, "there should be 8 teams")
         XCTAssertNotNil(response.teams.first { ($0.squad?.isEmpty ?? true) == false })
         XCTAssertNotNil(response.teams.first { $0.coach != nil })
         XCTAssertEqual(response.teams.first { $0.coach?.name == "Mikel Arteta" }?.coach?.name, "Mikel Arteta")
@@ -293,9 +294,9 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(response.injuries.first?.chanceOfPlayingNextRound, 25)
     }
 
-    // MARK: - 排序逻辑（射手榜/助攻榜）
+    // MARK: - Leaderboard sorting (scorers / assists)
 
-    /// 射手榜稳定排序：进球降序；并列按出场数升序
+    /// Scorers stable sort: goals desc; ties broken by fewest appearances.
     func testScorerStableSort() {
         let teamA = Team(id: 1, name: "A", shortName: nil, crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         let teamB = Team(id: 2, name: "B", shortName: nil, crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
@@ -315,7 +316,7 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(sorted[2].player.id, 2)
     }
 
-    /// 助攻榜稳定排序：助攻降序；并列按进球数降序；再并列按出场数升序
+    /// Assists stable sort: assists desc; ties by most goals; then by fewest appearances.
     func testAssistStableSort() {
         let teamA = Team(id: 1, name: "A", shortName: nil, crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         let pTop = Assist(from: Scorer(player: PlayerLite(id: 1, name: "Top", nationality: nil), team: teamA, goals: 5, assists: 12, playedMatches: 30))
@@ -326,19 +327,20 @@ final class EPLViewerTests: XCTestCase {
         let vm = LeadersViewModel()
         vm.assists = [pTieMorePlayed, pTop, pTieLessGoals, pTieMoreGoals]
         let sorted = vm.assistsSorted
-        // pTop (12) 排第一
+        // pTop (12) leads
         XCTAssertEqual(sorted[0].player.id, 1)
-        // 并列 8 助攻：进球多者(10) 排前
+        // Tied on 8 assists: more goals (10) ranks higher
         XCTAssertEqual(sorted[1].player.id, 2)
-        // 并列 8 助攻+3 球：出场少者(10) 排前
+        // Tied on 8 assists + 3 goals: fewer appearances (10) ranks higher
         XCTAssertEqual(sorted[2].player.id, 3)
         XCTAssertEqual(sorted[3].player.id, 4)
     }
 
-    /// StandingsAggregator 单测：3 场人造赛事（Arsenal 2胜 + 1平 = 7分 vs Tottenham 1胜1平1负 = 4分）
-    /// 验证 RowStat.points() 与聚合输出的 StandingRow.points/排序正确
+    /// StandingsAggregator unit test: 3 synthetic rows (Arsenal 2W+1D = 7 pts vs
+    /// Tottenham 1W 1D 1L = 4 pts). Verifies RowStat.points() and the aggregated
+    /// StandingRow points / ordering.
     func testStandingsAggregatorPureSort() {
-        // 用人造 RowStat 测算逻辑（避开真实网络 fetch）
+        // Synthetic RowStats exercise the math (no real network fetches)
         let arsenal = StandingsAggregator.RowStat(played: 3, won: 2, draw: 1, lost: 0, gf: 5, ga: 1)
         let tottenham = StandingsAggregator.RowStat(played: 3, won: 1, draw: 1, lost: 1, gf: 3, ga: 3)
         let brighton = StandingsAggregator.RowStat(played: 3, won: 0, draw: 1, lost: 2, gf: 1, ga: 5)
@@ -351,7 +353,8 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(tottenham.gd(), 0)
         XCTAssertEqual(brighton.gd(), -4)
 
-        // 实际聚合在 production 走 follow/network；这里仅断言纯函数与"积分相同则按净胜球"的稳定排序规则
+        // Real aggregation follows $refs in production; here we assert the pure
+        // functions and the "equal points → GD" stable ordering rule.
         let stats: [(String, StandingsAggregator.RowStat)] = [
             ("Brighton", brighton), ("Tottenham", tottenham), ("Arsenal", arsenal)
         ]
@@ -361,23 +364,23 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(sorted[2].0, "Brighton")
     }
 
-    // MARK: - FPL bootstrap 解码与派生
+    // MARK: - FPL bootstrap decoding & derivation
 
-    /// FPL bootstrap 原始 JSON 可解码，并按 goals_scored 派生射手榜
+    /// The FPL bootstrap raw JSON decodes and derives the scorers table by goals_scored.
     func testFPLBootstrapDecoding() throws {
         let bootstrap = try makeNativeDecoder().decode(FPLBootstrap.self, from: Data(fplBootstrapJSON.utf8))
         XCTAssertEqual(bootstrap.teams.count, 3)
         XCTAssertEqual(bootstrap.elements.count, 4)
         XCTAssertEqual(bootstrap.element_types.count, 4)
 
-        // 派生射手榜：Haaland 27 球排第一
+        // Derived scorers: Haaland's 27 goals lead
         let scorers = FPLTranslator.scorers(from: bootstrap)
         XCTAssertEqual(scorers.first?.goals, 27)
         XCTAssertEqual(scorers.first?.player.name, "Haaland")
         XCTAssertEqual(scorers.first?.team.name, "Manchester City")
     }
 
-    /// 派生助攻榜：按 assists 降序
+    /// Derived assists: assists descending.
     func testFPLAssistsDerivation() throws {
         let bootstrap = try makeNativeDecoder().decode(FPLBootstrap.self, from: Data(fplBootstrapJSON.utf8))
         let assists = FPLTranslator.assists(from: bootstrap)
@@ -385,7 +388,7 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(assists.first?.player.name, "Salah")
     }
 
-    /// 射手榜/助攻榜只显示前 10 名（limit=10）；limit=0 表示不限制
+    /// Scorers/assists show only the top 10 (limit=10); limit=0 means unlimited.
     func testFPLLeaderboardsCappedToTen() throws {
         let team = FPLTeam(id: 1, code: 3, name: "Arsenal", short_name: "ARS", strength: nil)
         let elements = (1...15).map { i in
@@ -396,48 +399,50 @@ final class EPLViewerTests: XCTestCase {
         let bootstrap = FPLBootstrap(teams: [team], elements: elements, element_types: [], events: nil)
 
         let scorers = FPLTranslator.scorers(from: bootstrap, limit: 10)
-        XCTAssertEqual(scorers.count, 10, "射手榜应只显示前 10 名")
+        XCTAssertEqual(scorers.count, 10, "the scorers table should cap at 10")
         XCTAssertEqual(scorers.first?.goals, 15)
         XCTAssertEqual(scorers.last?.goals, 6)
 
         let assists = FPLTranslator.assists(from: bootstrap, limit: 10)
-        XCTAssertEqual(assists.count, 10, "助攻榜应只显示前 10 名")
+        XCTAssertEqual(assists.count, 10, "the assists table should cap at 10")
 
-        // limit=0 不截断
+        // limit=0 doesn't truncate
         XCTAssertEqual(FPLTranslator.scorers(from: bootstrap, limit: 0).count, 15)
     }
 
-    /// 派生伤停榜：仅含 status != "a" 的球员
+    /// Derived injuries: only players with status != "a".
     func testFPLInjuriesDerivation() throws {
         let bootstrap = try makeNativeDecoder().decode(FPLBootstrap.self, from: Data(fplBootstrapJSON.utf8))
         let injuries = FPLTranslator.injuries(from: bootstrap)
-        // 4 个球员中：Saka(a) 和 Salah(a) 被过滤；Haaland(i) + Watkins(d) = 2
+        // Of the 4 players: Saka(a) and Salah(a) filtered; Haaland(i) + Watkins(d) = 2
         XCTAssertEqual(injuries.count, 2)
         XCTAssertTrue(injuries.contains { $0.player.name == "Haaland" && $0.status == "i" })
         XCTAssertTrue(injuries.contains { $0.player.name == "Watkins" && $0.status == "d" })
     }
 
-    /// 赛程翻译：FPL fixtures → 内部 Match（轮次 / 状态 / 比分 / 队徽）
+    /// Fixture translation: FPL fixtures → internal Matches (round / status / score / crest).
     func testFPLFixturesToMatches() throws {
         let teams = [
             FPLTeam(id: 1, code: 3, name: "Arsenal", short_name: "ARS", strength: nil),
             FPLTeam(id: 7, code: 11, name: "Chelsea", short_name: "CHE", strength: nil),
         ]
         let fixtures = [
-            // 已结束（FPL 标记 finished=true），带最终比分 → FINISHED
+            // Finished (FPL finished=true) with a final score → FINISHED
             FPLFixture(event: 1, team_h: 1, team_a: 7, team_h_score: 3, team_a_score: 0,
                        kickoff_time: "2026-08-21T19:00:00Z", finished: true, started: true,
                        finished_provisional: true, minutes: 90),
-            // 进行中（started=true 但 finished=false，未满 90 分钟），有实时比分 → IN_PLAY（UI 加 ⚽，不误判为已结束）
+            // Live (started=true, finished=false, under 90 minutes) with a live score →
+            // IN_PLAY (UI adds ⚽; must not be misread as finished)
             FPLFixture(event: 2, team_h: 7, team_a: 1, team_h_score: 1, team_a_score: 2,
                        kickoff_time: "2026-08-22T19:00:00Z", finished: false, started: true,
                        finished_provisional: false, minutes: 23),
-            // 终场后 FPL 尚未翻转 finished，但已置 finished_provisional=true（实际已结束）→ FINISHED，不应显示 ⚽
-            // （复现：第 2 轮 水晶宫 vs 曼城，score 1-4、minutes 90、finished=false）
+            // FPL hasn't flipped finished after full time, but finished_provisional=true
+            // (actually over) → FINISHED, no ⚽.
+            // (Repro: round 2 Crystal Palace vs City, 1-4, minutes 90, finished=false)
             FPLFixture(event: 3, team_h: 1, team_a: 7, team_h_score: 1, team_a_score: 4,
                        kickoff_time: "2026-08-23T19:00:00Z", finished: false, started: true,
                        finished_provisional: true, minutes: 90),
-            // 未开球 → SCHEDULED，无比分
+            // Not kicked off → SCHEDULED, no score
             FPLFixture(event: 4, team_h: 1, team_a: 7, team_h_score: nil, team_a_score: nil,
                        kickoff_time: "2026-08-28T19:00:00Z", finished: false, started: false,
                        finished_provisional: false, minutes: 0),
@@ -452,12 +457,12 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(m1.homeTeam.crest, "https://resources.premierleague.com/premierleague/badges/50/t3.png")
 
         let m2 = matches.first(where: { $0.matchday == 2 })!
-        XCTAssertEqual(m2.status, "IN_PLAY")   // 关键：进行中有实时比分时不被误判为已结束
+        XCTAssertEqual(m2.status, "IN_PLAY")   // key: live with a score isn't misread as finished
         XCTAssertEqual(m2.score?.fullTime?.home, 1)
         XCTAssertEqual(m2.score?.fullTime?.away, 2)
 
         let m3 = matches.first(where: { $0.matchday == 3 })!
-        XCTAssertEqual(m3.status, "FINISHED")  // 关键：finished_provisional=true 的终场比赛不应显示 ⚽
+        XCTAssertEqual(m3.status, "FINISHED")  // key: finished_provisional=true shows no ⚽
         XCTAssertEqual(m3.score?.fullTime?.home, 1)
         XCTAssertEqual(m3.score?.fullTime?.away, 4)
 
@@ -466,30 +471,30 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertNil(m4.score)
     }
 
-    /// 派生球队：含从 elements 派生的 squad
+    /// Derived teams: with squads built from elements.
     func testFPLTeamsDerivation() throws {
         let bootstrap = try makeNativeDecoder().decode(FPLBootstrap.self, from: Data(fplBootstrapJSON.utf8))
         let teams = FPLTranslator.teams(from: bootstrap)
         XCTAssertEqual(teams.count, 3)
         let arsenal = teams.first { $0.name == "Arsenal" }
         XCTAssertNotNil(arsenal)
-        // Arsenal 含 Saka 和 Salah 两名球员
+        // Arsenal carries Saka and Salah
         XCTAssertEqual(arsenal?.squad?.count, 2)
-        // 队徽 URL 形如 https://resources.premierleague.com/premierleague/badges/50/t3.png
+        // Crest URL looks like https://resources.premierleague.com/premierleague/badges/50/t3.png
         XCTAssertEqual(arsenal?.crest, "https://resources.premierleague.com/premierleague/badges/50/t3.png")
-        // 球员 position 已映射：Saka 是 Midfielder，Haaland 是 Forward
+        // Player positions mapped: Saka is a Midfielder, Haaland a Forward
         let saka = arsenal?.squad?.first { $0.name == "Saka" }
         XCTAssertEqual(saka?.position, "Midfielder")
     }
 
-    // MARK: - ESPN 原生解码与翻译
+    // MARK: - ESPN native decoding & translation
 
-    /// ESPN standings 原生 JSON 可解码，并正确翻译为内部 StandingRow
+    /// ESPN standings raw JSON decodes and translates correctly to StandingRows.
     func testESPNStandingsTranslation() throws {
         let resp = try makeNativeDecoder().decode(ESPNStandingsResponse.self, from: Data(espnStandingsJSON.utf8))
         let rows = ESPNTranslator.standingRows(from: resp)
         XCTAssertEqual(rows.count, 2)
-        // 按 points 降序：Arsenal 48 > City 43
+        // Points descending: Arsenal 48 > City 43
         XCTAssertEqual(rows[0].team.name, "Arsenal")
         XCTAssertEqual(rows[0].points, 48)
         XCTAssertEqual(rows[0].playedGames, 20)
@@ -503,7 +508,8 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(rows[1].team.name, "Manchester City")
     }
 
-    /// ESPN scoreboard 原生 JSON 可解码，并正确翻译为内部 Match（含状态映射）
+    /// ESPN scoreboard raw JSON decodes and translates correctly to Matches
+    /// (including the status mapping).
     func testESPNScoreboardTranslation() throws {
         let resp = try makeNativeDecoder().decode(ESPNScoreboardResponse.self, from: Data(espnScoreboardJSON.utf8))
         let matches = ESPNTranslator.matches(from: resp)
@@ -517,7 +523,7 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertNil(scheduled?.score)
     }
 
-    /// ESPN 状态名翻译
+    /// ESPN status-name translation.
     func testStatusTranslator() {
         XCTAssertEqual(StatusTranslator.translate("STATUS_FINAL"), "FINISHED")
         XCTAssertEqual(StatusTranslator.translate("STATUS_SCHEDULED"), "SCHEDULED")
@@ -526,9 +532,10 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(StatusTranslator.translate("UNKNOWN"), "UNKNOWN")
     }
 
-    // MARK: - 源码扫描工具
+    // MARK: - Source-scan utilities
 
-    /// 剥掉 `//` 行注释只留代码 —— 否则「为什么不能用 LazyVStack」这类解释性注释会误报
+    /// Strip `//` line comments, keeping code only — otherwise explanatory comments
+    /// like "why LazyVStack is banned" would false-positive.
     func codeOnly(_ source: String) -> String {
         source.split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> String in
@@ -541,7 +548,7 @@ final class EPLViewerTests: XCTestCase {
     func sourceRoot() -> URL {
         URL(fileURLWithPath: #filePath)                  // .../EPLViewerTests/EPLViewerTests.swift
             .deletingLastPathComponent()                 // EPLViewerTests/
-            .deletingLastPathComponent()                 // 仓库根
+            .deletingLastPathComponent()                 // repo root
             .appendingPathComponent("EPLViewer")
     }
 
@@ -549,14 +556,15 @@ final class EPLViewerTests: XCTestCase {
         try String(contentsOf: try locateSource(named: name), encoding: .utf8)
     }
 
-    /// 在源码目录树中按文件名递归定位（分层目录后源码不再平铺在根下）
+    /// Locate a source file by name recursively (the layered layout means sources no
+    /// longer sit flat under the root).
     func locateSource(named name: String) throws -> URL {
         let enumerator = FileManager.default.enumerator(at: sourceRoot(), includingPropertiesForKeys: nil)
         while let url = enumerator?.nextObject() as? URL {
             if url.lastPathComponent == name { return url }
         }
         throw NSError(domain: "EPLViewerTests", code: 1,
-                      userInfo: [NSLocalizedDescriptionKey: "源文件未找到: \(name)"])
+                      userInfo: [NSLocalizedDescriptionKey: "source file not found: \(name)"])
     }
 
     func allSourceFiles() throws -> [(name: String, text: String)] {
@@ -570,7 +578,7 @@ final class EPLViewerTests: XCTestCase {
             .map { (name: $0.lastPathComponent, text: try String(contentsOf: $0, encoding: .utf8)) }
     }
 
-    /// 子串出现次数（非重叠）
+    /// Non-overlapping substring occurrence count.
     func count(of token: String, in s: String) -> Int {
         var n = 0
         var idx = s.startIndex
@@ -581,9 +589,10 @@ final class EPLViewerTests: XCTestCase {
         return n
     }
 
-    /// 扫出「lazy 容器嵌在 lazy 容器里」的位置。返回空数组即未踩红线。
-    /// 做法：逐字符走，跟踪花括号深度；遇到 `LazyXXX(` 记下它所在深度，
-    /// 若栈里已有另一个 lazy 容器处于更浅/相等深度，说明它被套在里面。
+    /// Detects any "lazy container inside another lazy container". Returns an empty
+    /// array when the red line is respected. Walks character by character tracking
+    /// brace depth: on `LazyXXX(`, record its depth; if the stack already holds
+    /// another lazy container at a shallower/equal depth, it's nested inside.
     func lazyNestingViolations(_ code: String) -> [String] {
         let names = ["LazyVStack", "LazyHStack", "LazyVGrid", "LazyHGrid"]
         var violations: [String] = []
@@ -612,7 +621,7 @@ final class EPLViewerTests: XCTestCase {
                 default:
                     for n in names where code[idx...].hasPrefix(n + "(") {
                         if let outer = stack.last {
-                            violations.append("\(n) 嵌在 \(outer.name) 内")
+                            violations.append("\(n) nested inside \(outer.name)")
                         }
                         stack.append((n, depth))
                         advance = n.count + 1
@@ -624,8 +633,9 @@ final class EPLViewerTests: XCTestCase {
         return violations
     }
 
-    /// 找源码里写死的、用户可见的中文字符串。
-    /// DateFormatter 模板（"M月d日" / "M月d日 HH:mm"）不算 —— 那是格式串不是文案。
+    /// Finds hardcoded user-facing Chinese strings in source.
+    /// DateFormatter templates ("M月d日" / "M月d日 HH:mm") don't count — those are
+    /// format strings, not copy.
     func hardcodedCJK(in code: String) -> [String] {
         let re = try! NSRegularExpression(pattern: "\"([^\"\\\n]*)\"")
         let ns = code as NSString
@@ -642,48 +652,50 @@ final class EPLViewerTests: XCTestCase {
         return out
     }
 
-    // MARK: - 网络超时与取数预算
+    // MARK: - Network timeouts & fetch budgets
 
-    /// `URLSession.shared` 的资源超时是 7 天，遇到「连上了但服务端慢慢吐」的接口
-    /// （实测 FPL bootstrap-static 会挂 30s+ 不结束）会让 await 永不返回，
-    /// 表现为界面一直转圈 + 点不动。这里守住超时必须是有限值。
+    /// `URLSession.shared`'s resource timeout is 7 days; an endpoint that connects
+    /// but trickles (FPL bootstrap-static has hung 30s+ without finishing) would make
+    /// `await` never return — an endless spinner and a frozen UI. Guard: the timeouts
+    /// must be finite.
     func testAPIClientTimeoutsAreFinite() {
         let cfg = APIClient.session.configuration
         XCTAssertLessThan(cfg.timeoutIntervalForResource, 120,
-                          "资源总时长必须有上限，否则慢接口会无限挂起")
+                          "the overall resource timeout must be bounded, or slow endpoints hang forever")
         XCTAssertLessThanOrEqual(cfg.timeoutIntervalForRequest, cfg.timeoutIntervalForResource)
-        XCTAssertFalse(cfg.waitsForConnectivity, "断网应立即失败，好让兜底数据顶上")
+        XCTAssertFalse(cfg.waitsForConnectivity, "offline should fail immediately so fallback data takes over")
 
         let imgCfg = APIClient.imageSession.configuration
         XCTAssertLessThanOrEqual(imgCfg.timeoutIntervalForResource, cfg.timeoutIntervalForResource,
-                                 "队徽属于锦上添花，超时不应比主数据还宽松")
+                                 "crests are nice-to-have; their timeout must be no looser than the main data's")
     }
 
-    /// 正常快路径：预算内完成，返回真实值
+    /// The normal fast path: finishes within budget, returns the real value.
     func testWithTimeBudgetReturnsValueWhenFast() async {
         let value = await withTimeBudget(seconds: 5) { 42 }
         XCTAssertEqual(value, 42)
     }
 
-    /// 关键路径：操作超预算时必须返回 nil，而不是一直等下去
+    /// The critical path: an operation over budget must return nil rather than wait forever.
     func testWithTimeBudgetGivesUpWhenOperationIsSlow() async {
         let started = Date()
         let value = await withTimeBudget(seconds: 1) { () -> Int in
-            try? await Task.sleep(nanoseconds: 30_000_000_000) // 远超预算
+            try? await Task.sleep(nanoseconds: 30_000_000_000) // far over budget
             return 42
         }
-        XCTAssertNil(value, "超预算应放弃并返回 nil")
+        XCTAssertNil(value, "over budget should give up and return nil")
         XCTAssertLessThan(Date().timeIntervalSince(started), 5,
-                          "放弃要干脆：1 秒预算不该等上 30 秒")
+                          "giving up must be decisive: a 1-second budget shouldn't wait 30")
     }
 
-    /// 数据源本身返回 nil（拿不到数据）时，要如实传递 nil，不与「超时」混淆
+    /// When the data source itself returns nil (no data), pass that nil through
+    /// faithfully — don't conflate it with a timeout.
     func testWithTimeBudgetPropagatesNilResult() async {
         let value: Int? = await withTimeBudget(seconds: 5) { nil }
         XCTAssertNil(value)
     }
 
-    // MARK: - 当前轮派生（纯函数）
+    // MARK: - Current-round derivation (pure functions)
 
     func testDeriveCurrentRoundPrefersIsCurrent() {
         let events = [
@@ -691,18 +703,18 @@ final class EPLViewerTests: XCTestCase {
             FPLGameweek(id: 2, name: nil, is_current: false, is_next: true,  finished: false, deadline_time: nil),
             FPLGameweek(id: 3, name: nil, is_current: true,  is_next: false, finished: false, deadline_time: nil),
         ]
-        XCTAssertEqual(DataRepository.deriveCurrentRound(events), 3, "is_current 优先级最高")
+        XCTAssertEqual(DataRepository.deriveCurrentRound(events), 3, "is_current has the highest priority")
     }
 
     func testDeriveCurrentRoundFallsBackToNextThenLatestFinished() {
-        // 无 is_current → 取 is_next
+        // No is_current → take is_next
         let noCurrent = [
             FPLGameweek(id: 1, name: nil, is_current: false, is_next: false, finished: true, deadline_time: nil),
             FPLGameweek(id: 2, name: nil, is_current: false, is_next: true,  finished: false, deadline_time: nil),
         ]
         XCTAssertEqual(DataRepository.deriveCurrentRound(noCurrent), 2)
 
-        // 无 is_current / is_next → 取最新已结束轮
+        // No is_current / is_next → take the latest finished round
         let onlyFinished = [
             FPLGameweek(id: 5, name: nil, is_current: false, is_next: false, finished: true, deadline_time: nil),
             FPLGameweek(id: 7, name: nil, is_current: false, is_next: false, finished: true, deadline_time: nil),
@@ -710,17 +722,18 @@ final class EPLViewerTests: XCTestCase {
         ]
         XCTAssertEqual(DataRepository.deriveCurrentRound(onlyFinished), 7)
 
-        // 什么都没有 → 回退首轮
+        // Nothing at all → fall back to the first round
         let empty = [
             FPLGameweek(id: 4, name: nil, is_current: nil, is_next: nil, finished: nil, deadline_time: nil),
         ]
         XCTAssertEqual(DataRepository.deriveCurrentRound(empty), 4)
 
-        XCTAssertNil(DataRepository.deriveCurrentRound([]), "空列表返回 nil")
+        XCTAssertNil(DataRepository.deriveCurrentRound([]), "an empty list returns nil")
     }
 
-    /// FPL events 拿不到（超时/网络失败）时的本地兜底：
-    /// 取第一个还有未结束比赛的轮次，全部结束则取最后一轮。
+    /// The local fallback when FPL events are unavailable (timeout / network failure):
+    /// take the first round with unfinished matches; if all are finished, the last
+    /// round with any matches.
     func testInferCurrentRoundFromMatches() {
         let vm = FixturesViewModel()
         vm.matches = [
@@ -729,9 +742,9 @@ final class EPLViewerTests: XCTestCase {
             makeMatch(id: 3, kickoff: "2025-09-04T14:00:00Z", status: "SCHEDULED", matchday: 3),
         ]
         XCTAssertEqual(vm.inferCurrentRoundFromMatches(), 2,
-                       "第 1 轮全踢完、第 2 轮还没开始 → 当前轮应为 2")
+                       "round 1 fully played, round 2 not started → the current round is 2")
 
-        // 全部结束 → 取最后一个有比赛的轮次
+        // All finished → the last round with matches
         let allDone = FixturesViewModel()
         allDone.matches = [
             makeMatch(id: 1, kickoff: "2025-08-21T14:00:00Z", status: "FINISHED", matchday: 1),
@@ -739,11 +752,12 @@ final class EPLViewerTests: XCTestCase {
         ]
         XCTAssertEqual(allDone.inferCurrentRoundFromMatches(), 2)
 
-        XCTAssertNil(FixturesViewModel().inferCurrentRoundFromMatches(), "无数据返回 nil")
+        XCTAssertNil(FixturesViewModel().inferCurrentRoundFromMatches(), "no data returns nil")
     }
 
-    /// `CurrentRoundInference` 是赛程页与今日页共用的兜底规则，单独覆盖：
-    /// 第一个还有未结束比赛的轮次；全部结束则取最后一个有比赛的轮次。
+    /// `CurrentRoundInference` is the fallback rule shared by the fixtures and today
+    /// pages, covered on its own: the first round with unfinished matches; if all are
+    /// finished, the last round with matches.
     func testCurrentRoundInferenceSharedByBothPages() {
         let ongoing = [
             makeMatch(id: 1, kickoff: "2025-08-21T14:00:00Z", status: "FINISHED", matchday: 3),
@@ -751,9 +765,9 @@ final class EPLViewerTests: XCTestCase {
             makeMatch(id: 3, kickoff: "2025-09-04T14:00:00Z", status: "SCHEDULED", matchday: 5),
         ]
         XCTAssertEqual(CurrentRoundInference.infer(from: ongoing), 4,
-                       "进行中的比赛也算未结束 → 当前轮是 4")
+                       "a live match also counts as unfinished → the current round is 4")
 
-        // 轮次乱序传入也要正确（内部自行排序）
+        // Shuffled input must still infer correctly (sorted internally)
         let shuffled = [
             makeMatch(id: 3, kickoff: "2025-09-04T14:00:00Z", status: "SCHEDULED", matchday: 9),
             makeMatch(id: 1, kickoff: "2025-08-21T14:00:00Z", status: "FINISHED", matchday: 2),
@@ -761,21 +775,21 @@ final class EPLViewerTests: XCTestCase {
         ]
         XCTAssertEqual(CurrentRoundInference.infer(from: shuffled), 6)
 
-        // 全部结束 → 最后一个有比赛的轮次
+        // All finished → the last round with matches
         let allDone = [
             makeMatch(id: 1, kickoff: "2025-08-21T14:00:00Z", status: "FINISHED", matchday: 1),
             makeMatch(id: 2, kickoff: "2025-08-28T14:00:00Z", status: "FINISHED", matchday: 2),
         ]
         XCTAssertEqual(CurrentRoundInference.infer(from: allDone), 2)
 
-        // matchday 为 nil 的未分配比赛应被忽略，不影响推断
+        // Matches with a nil matchday are ignored and don't affect the inference
         let withNil = [
             makeMatch(id: 1, kickoff: "2025-08-21T14:00:00Z", status: "FINISHED", matchday: 1),
             makeMatch(id: 2, kickoff: "2025-08-28T14:00:00Z", status: "SCHEDULED", matchday: nil),
         ]
         XCTAssertEqual(CurrentRoundInference.infer(from: withNil), 1)
 
-        XCTAssertNil(CurrentRoundInference.infer(from: []), "空赛程返回 nil")
+        XCTAssertNil(CurrentRoundInference.infer(from: []), "an empty fixture list returns nil")
     }
 
 }

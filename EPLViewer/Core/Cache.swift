@@ -1,39 +1,40 @@
 import Foundation
 
-// MARK: - 缓存层（内存 + 磁盘，TTL）
+// MARK: - Cache layer (in-memory + on-disk JSON with TTL)
 
-// MARK: - 缓存层（on-disk JSON with TTL）
-
-/// 缓存 TTL 配置（不同数据使用不同过期时长）
+/// Per-data-type cache TTLs.
 enum CacheTTL {
-    /// 赛程/比分：懒刷新 TTL（仅约束「切 tab / 启动」等被动取数的新鲜度）。
-    /// Match 内含实时比分，已结束比赛的比分会随赛后更新；
-    ///   但 TTL 只决定「被动取数多久算陈旧」，手动刷新会先清缓存强制拿最新，
-    ///   因此这里给一个浏览友好的 5 分钟——平时不频繁打扰网络，
-    ///   想立刻看结果时点右上角刷新即可（绕过此 TTL）。
+    /// Fixtures/scores: lazy-refresh TTL — only bounds how stale a *passive* fetch
+    /// (tab switch / app launch) may be. `Match` carries live scores that keep
+    /// updating after full time, but the TTL only decides when passive fetches go
+    /// stale; a manual refresh clears the cache and bypasses it entirely, so a
+    /// friendly 5 minutes keeps everyday browsing quiet while "refresh now" still
+    /// gets the latest scores.
     static let fixtures: TimeInterval = 60 * 5
-    /// FPL bootstrap：携带球队/射手/助攻/伤停数据，每场比赛后才会更新，缓存 2 小时
+    /// FPL bootstrap: players / scorers / assists / injuries; only updates after
+    /// matches finish, so cache for 2 hours.
     static let bootstrap: TimeInterval = 60 * 60 * 2
-    /// 积分榜：懒刷新 TTL（同 fixtures，5 分钟）。手动刷新同样绕过。
+    /// Standings: lazy-refresh TTL (same rationale as fixtures). Manual refresh bypasses.
     static let standings: TimeInterval = 60 * 5
-    /// 赛果：按日刷新即可，缓存 5 分钟
+    /// Scoreboard: daily-ish data, 5 minutes is plenty.
     static let scoreboard: TimeInterval = 60 * 5
 
-    /// 纯函数：判断缓存是否在 TTL 内（便于单测）
+    /// Pure function: is the cache still within its TTL (unit-testable).
     static func isValid(mtime: Date, ttl: TimeInterval, now: Date = Date()) -> Bool {
         now.timeIntervalSince(mtime) < ttl
     }
 }
 
-/// 进程内内存缓存（actor 保证线程安全）
+/// In-process memory cache (actor for thread safety).
 ///
-/// 磁盘缓存（CacheStore）解决「跨 App 启动」的持久化，但每次取数都要
-/// 读文件 + JSONDecoder 全量解码 —— 切一次 tab 就把 bootstrap 解两遍
-/// （currentGameweek + gameweeks），既慢又白耗电。
-/// 这里补一层内存缓存：同一生命周期内只解码一次，之后直接返回内存对象。
+/// The disk cache (`CacheStore`) persists across launches, but every fetch would
+/// still pay a file read + full `JSONDecoder` decode — switching tabs decoded the
+/// bootstrap twice (currentGameweek + gameweeks): slow and wasteful. This layer
+/// decodes once per app session and hands back the in-memory object afterwards.
 ///
-/// ⚠️ 手动刷新 / 清缓存时必须一并清空（见 DataRepository.clearCache），
-/// 否则清完磁盘仍会命中内存里的旧数据。
+/// ⚠️ Manual refresh / clear-cache must clear this too (see
+/// `DataRepository.clearCache`), otherwise the disk clears but stale memory
+/// objects keep being served.
 actor MemoryStore {
     static let shared = MemoryStore()
 
@@ -46,24 +47,25 @@ actor MemoryStore {
     func cachedFixtures() -> [Match]? { fixtures }
     func cacheFixtures(_ value: [Match]) { fixtures = value }
 
-    /// 清空全部内存缓存（手动刷新 / 设置里清缓存时调用）
+    /// Clear everything (manual refresh / clear-cache in Settings).
     func clear() {
         bootstrap = nil
         fixtures = nil
     }
 
-    /// 只清赛程（比赛期间自动刷新轮询用），保留 bootstrap
+    /// Clear fixtures only (live-match polling), keep bootstrap.
     func clearFixtures() { fixtures = nil }
 }
 
-/// 简易落盘缓存（actor 保证线程安全）
+/// Minimal on-disk cache (actor for thread safety).
 actor CacheStore {
     static let shared = CacheStore()
 
     private let cacheDir: URL
 
-    /// - Parameter directory: 缓存目录；nil 用默认（App Support/EPLViewer/cache）。
-    ///   测试注入临时目录，避免污染真实缓存。
+    /// - Parameter directory: cache directory; nil uses the default
+    ///   (App Support/EPLViewer/cache). Tests inject a temp directory to keep
+    ///   the real cache untouched.
     init(directory: URL? = nil) {
         if let directory {
             cacheDir = directory
@@ -84,14 +86,14 @@ actor CacheStore {
         cacheDir.appendingPathComponent(sanitize(key) + ".json")
     }
 
-    /// 文件名安全化
+    /// File-name-safe version of a cache key.
     private func sanitize(_ key: String) -> String {
         key.replacingOccurrences(of: "/", with: "_")
            .replacingOccurrences(of: "?", with: "_")
            .replacingOccurrences(of: "&", with: "_")
     }
 
-    /// 读取缓存（带 TTL 判断）
+    /// Read a cache entry (respects TTL).
     func get<T: Decodable>(_ key: String, ttl: TimeInterval) -> T? {
         let u = url(for: key)
         guard let data = try? Data(contentsOf: u),
@@ -102,17 +104,18 @@ actor CacheStore {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
-    /// 读取缓存，**忽略 TTL**（stale-if-error 兜底）。
+    /// Read a cache entry **ignoring TTL** (stale-if-error fallback).
     ///
-    /// 用途：网络失败 / 超时、且 TTL 内缓存也没有时，回退到上次成功落盘的数据 ——
-    /// 内容真实但可能过期，好过空白或假样例。解码失败（文件损坏）返回 nil。
+    /// Used when the network fails/times out and no fresh cache exists: serve the
+    /// last successfully persisted data — real content, possibly outdated, better
+    /// than a blank page or fake samples. Returns nil on decode failure (corrupt file).
     func getStale<T: Decodable>(_ key: String) -> T? {
         let u = url(for: key)
         guard let data = try? Data(contentsOf: u) else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
-    /// 写入缓存
+    /// Write a cache entry.
     func set<T: Encodable>(_ key: String, value: T) {
         let u = url(for: key)
         let enc = JSONEncoder()
@@ -121,7 +124,7 @@ actor CacheStore {
         }
     }
 
-    /// 清除所有缓存
+    /// Remove every cache entry.
     func clear() {
         try? FileManager.default.removeItem(at: cacheDir)
         try? FileManager.default.createDirectory(
@@ -130,7 +133,7 @@ actor CacheStore {
         )
     }
 
-    /// 只删某个 key（比赛期间自动刷新只失效赛程缓存用），不动其它缓存
+    /// Remove a single key (live-match polling invalidates fixtures only).
     func remove(_ key: String) {
         try? FileManager.default.removeItem(at: url(for: key))
     }

@@ -1,26 +1,26 @@
 import SwiftUI
 
 #if DEBUG
-/// 调试期球员中文名覆盖管理器（仅 DEBUG 编译，不进 Release）。
-/// 入口：设置页「管理球员译名…」按钮弹出的 sheet。
-/// 布局：左侧球队列表（分球队显示），右侧选中球队的球员名单；
-/// 编辑累积在 `draft` 里，工具栏一个「保存」统一提交，一个「放弃修改」撤销。
+/// DEBUG player-name override manager (DEBUG builds only, never shipped).
+/// Entry: the "Manage Player Names…" button in Settings presents this sheet.
+/// Layout: team list on the left, the selected team's players on the right;
+/// edits accumulate in `draft`, with a single "Save" commit and "Discard" on the toolbar.
 struct PlayerNameManagerView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     @State private var bootstrap: FPLBootstrap?
     @State private var draft: PlayerNameOverrides = PlayerNameStore.shared.overrides
     @State private var selectedTeamId: Int? = nil
-    /// 保存后短暂显示的「已保存」提示标记（约 1.6s 后自动清除）。
+    /// The "saved" flash shown briefly after saving (auto-clears after ~1.6 s).
     @State private var justSaved = false
-    /// 驱动「已保存」提示自动消退的令牌；`save()` 时自增以重启计时任务。
+    /// Drives the flash's timer; `save()` bumps it to restart the task.
     @State private var saveFlashToken = 0
 
     private var language: AppLanguage { appState.language }
     private var store: PlayerNameStore { .shared }
 
     private var teams: [FPLTeam] { bootstrap?.teams ?? [] }
-    /// 球队全名（FPLTeam.name），供侧边栏与行内展示，不用缩写 short_name。
+    /// Team full names (FPLTeam.name) for the sidebar and rows — not the short codes.
     private var teamNameById: [Int: String] {
         Dictionary(uniqueKeysWithValues: teams.map { ($0.id, $0.name) })
     }
@@ -70,14 +70,16 @@ struct PlayerNameManagerView: View {
         }
     }
 
-    /// 提交草稿到覆盖层并落盘；随后短暂点亮「已保存」提示，解决「点了保存没反应」的反馈缺失。
+    /// Commit the draft to the override layer and persist, then flash "Saved" —
+    /// otherwise pressing save would give no visible feedback.
     private func save() {
         store.commit(draft)
         justSaved = true
         saveFlashToken &+= 1
     }
 
-    /// 底部状态栏：有未保存修改时橙色提示；刚保存后绿色「已保存」。否则不占空间。
+    /// Bottom status bar: orange when there are unsaved edits; green "Saved" flash
+    /// after saving; otherwise no space taken.
     @ViewBuilder
     private var statusBar: some View {
         HStack(spacing: 6) {
@@ -118,8 +120,9 @@ struct PlayerNameManagerView: View {
     }
 }
 
-/// 名单中的单行：web_name / 球队 / 全名 + 可编辑中文名。
-/// 编辑直接写入 `draft`（不即时持久化）；由管理器的「保存」统一提交。
+/// One row in the list: web_name / team / full name + editable Chinese name.
+/// Edits go straight into `draft` (not persisted immediately); the manager's
+/// "Save" commits everything at once.
 struct PlayerNameManagerRow: View {
     let player: FPLPlayer
     let teamName: String?
@@ -128,15 +131,16 @@ struct PlayerNameManagerRow: View {
 
     private var language: AppLanguage { appState.language }
 
-    /// 内置中文名（仅 zhById，不含已提交覆盖）——作为「是否产生冗余覆盖」的基线。
+    /// Built-in Chinese name (table only, excluding committed overrides) — the
+    /// baseline for flagging redundant overrides.
     private var builtIn: String? { PlayerNameMap.builtInName(forId: player.id) }
 
-    /// 当前应显示的中文名：草稿覆盖优先，否则回退内置（无则为空串）。
+    /// The name currently shown: draft override first, else built-in, else empty.
     private var display: String {
         draft.byId[player.id] ?? builtIn ?? ""
     }
 
-    /// 是否处于「覆盖」态（草稿里有该 id 的覆盖条目）。
+    /// Whether this row is overridden (a draft entry exists for this id).
     private var isOverride: Bool { draft.byId[player.id] != nil }
 
     private var binding: Binding<String> {
@@ -144,8 +148,9 @@ struct PlayerNameManagerRow: View {
             get: { display },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                // 空串 或 等于内置名 → 视为「无覆盖」删除条目（回退到内置名），
-                // 避免写入空串覆盖导致该球员中文名在全 app 变空白。
+                // Empty, or equal to the built-in name → treat as "no override" and
+                // delete the entry (falls back to the built-in name). Prevents an
+                // empty-string override blanking the name across the whole app.
                 if trimmed.isEmpty || trimmed == (builtIn ?? "") {
                     draft.byId.removeValue(forKey: player.id)
                 } else {

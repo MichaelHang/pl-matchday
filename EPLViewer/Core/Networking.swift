@@ -1,32 +1,31 @@
 import Foundation
 
-// MARK: - 网络会话与公开 API 客户端（ESPN / FPL）
+// MARK: - Network session & public API clients (ESPN / FPL)
 
-// MARK: - 网络会话（统一超时）
-
-/// 统一的网络会话配置。
+/// Unified URLSession configuration.
 ///
-/// ⚠️ 为什么不能直接用 `URLSession.shared`：
-/// 它的 `timeoutIntervalForResource` 默认是 **7 天**。遇到「TCP 连上了、但服务端慢慢吐数据」
-/// 的情况（实测 fantasy.premierleague.com/api/bootstrap-static/ 会挂 30 秒以上仍不结束），
-/// 请求会一直挂着既不成功也不失败 —— `await` 永不返回，
-/// ViewModel 里的 `isLoading` 就永远复位不了，界面表现是「一直转圈 + 点不动」
-/// （loading 遮罩盖住了整个内容区）。
-/// 这里统一收紧超时，让慢请求**快速失败**，从而能落到下一级兜底数据源。
+/// ⚠️ Why not `URLSession.shared`: its `timeoutIntervalForResource` defaults to
+/// **7 days**. When a TCP connection succeeds but the server trickles bytes
+/// (fantasy.premierleague.com/api/bootstrap-static/ has been observed hanging for
+/// 30+ seconds without finishing), the request neither succeeds nor fails — the
+/// `await` never returns, `isLoading` in the view model never resets, and the UI
+/// looks frozen under the loading overlay. Tightening the timeouts here makes slow
+/// requests **fail fast** so the next fallback tier can take over.
 enum APIClient {
-    /// 主数据请求（FPL / ESPN）
+    /// Main data requests (FPL / ESPN)
     static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15    // 两次收到数据之间的最大间隔
-        cfg.timeoutIntervalForResource = 30   // 整个请求的总时长上限
-        cfg.waitsForConnectivity = false      // 断网时立刻失败，好让兜底数据顶上
+        cfg.timeoutIntervalForRequest = 15    // max gap between two received data chunks
+        cfg.timeoutIntervalForResource = 30   // overall request duration cap
+        cfg.waitsForConnectivity = false      // fail immediately when offline, so fallbacks kick in
         cfg.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) EPLViewer/2.0"
         ]
         return URLSession(configuration: cfg)
     }()
 
-    /// 队徽等小资源：更激进的超时，宁可显示占位盾牌也不要拖慢列表
+    /// Small resources like crests: even tighter timeouts — a placeholder shield
+    /// beats a slow list.
     static let imageSession: URLSession = {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 8
@@ -36,45 +35,50 @@ enum APIClient {
     }()
 }
 
-// MARK: - ESPN 公开 API Provider
+// MARK: - ESPN public API provider
 
-/// ESPN 公开 API 客户端（无需 API Key）
-/// 重要：原 site.api.espn.com/apis/site/v2/... 现在全部返回空 {}（CDN/权限限制）。
-/// 真正可用的端点是 sports.core.api.espn.com/v2/...（core v3 API）。
-/// 已知端点（实测 2026-08-23）：
+/// ESPN public API client (no API key required).
+/// Important: the old site.api.espn.com/apis/site/v2/... endpoints now all return
+/// an empty {} (CDN / permission restrictions). The endpoints that actually work
+/// live under sports.core.api.espn.com/v2/... (core v3 API).
+/// Known endpoints (verified 2026-08-23):
 ///   ✅ standings:        /v2/.../seasons/{s}/types/1/groups/23/standings/0
 ///   ✅ events (schedule): /v2/.../events?dates=YYYYMMDD-YYYYMMDD
 ///   ✅ teams:            /v2/.../seasons/{s}/teams
-///   ❌ scorers (该 v3 API 不直接提供，改走 FPL bootstrap)
+///   ❌ scorers (not offered by the v3 API; derived from the FPL bootstrap instead)
 struct ESPNProvider {
-    /// 英格兰超级联赛（eng.1 = Premier League） core v3 端点（实测可用）
+    /// Premier League (eng.1) core v3 endpoint (verified working)
     let base = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
 
-    /// 拉取积分榜（v3 core 多层 $ref，已编平为单层 records/stats）
-    /// 注：8-9 月份赛季初 records 字段可能为空数组（积分尚未统计），
-    ///     Repository 层会回退到「从赛程聚合」或「上次落盘的积分榜缓存」。
+    /// Fetch the standings (v3 core nests several `$ref` layers; flattened here to
+    /// single-level records/stats).
+    /// Note: early in the season (Aug–Sep) `records` may be an empty array (no
+    /// points yet); the repository falls back to fixture aggregation or the last
+    /// persisted standings cache.
     func fetchStandings(season: Int) async throws -> ESPNStandingsCoreResponse {
         try await get("\(base)/seasons/\(season)/types/1/groups/23/standings/0?lang=en&region=us")
     }
 
-    /// 拉取某天赛果（YYYYMMDD，可选范围），用于日常小数据刷新
+    /// Fetch one day's results (YYYYMMDD, optional range) for small daily refreshes.
     func fetchScoreboard(date: String? = nil) async throws -> ESPNScoreboardResponse {
         var path = "\(base)/events"
         if let d = date { path += "?dates=\(d)" }
         return try await get(path)
     }
 
-    /// 拉取整赛季赛程（site API scoreboard）。
-    /// 与 core/events 不同，该端点直接内联 队名 / 队徽 / 比分 / 日期，无需 follow $ref，
-    /// 且返回结构正好匹配 ESPNScoreboardResponse（用于赛程与积分聚合）。
+    /// Fetch the full-season schedule (site API scoreboard).
+    /// Unlike core/events, this endpoint inlines team names / crests / scores /
+    /// dates — no `$ref` chasing — and its shape maps straight onto
+    /// `ESPNScoreboardResponse` (used for fixtures and standings aggregation).
     func fetchScoreboardSchedule(dates: String) async throws -> ESPNScoreboardResponse {
         let url = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=\(dates)"
         return try await get(url)
     }
 
-    /// 拉取整赛季赛程。
-    /// 当前 v3 core API 没有稳定的 season= 过滤参数；site.api.espn.com 的对应端点已 403/空。
-    /// 此处先尝试 v2 site API（仍可能空），并依赖 DataRepository 的回退链（过期缓存 → 空）。
+    /// Fetch the full-season schedule (v2 site API).
+    /// The v3 core API has no stable season= filter, and the equivalent
+    /// site.api.espn.com endpoint has been 403/empty. This attempt may return
+    /// nothing; the DataRepository fallback chain (stale cache → empty) takes over.
     func fetchSchedule(season: Int) async throws -> ESPNScoreboardResponse {
         let url = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/schedule?season=\(season)"
         return try await get(url)
@@ -83,7 +87,8 @@ struct ESPNProvider {
     private func get<T: Decodable>(_ path: String) async throws -> T {
         guard let url = URL(string: path) else { throw AppError.apiError(0) }
         var request = URLRequest(url: url)
-        // core v3 API 对 UA 有要求：缺省会被 CDN 屏蔽返回空 {}。
+        // The core v3 API requires a User-Agent: the default one gets blocked by
+        // the CDN and returns an empty {}.
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) EPLViewer/2.0", forHTTPHeaderField: "User-Agent")
         let data: Data
         let response: URLResponse
@@ -101,28 +106,28 @@ struct ESPNProvider {
     }
 }
 
-// ESPN core v3 原生 JSON 模型（适配 /standings/0 端点返回结构）
+// ESPN core v3 native JSON models (shape of the /standings/0 endpoint)
 struct ESPNStandingsCoreResponse: Codable {
     let name: String?
     let displayName: String?
-    let standings: [ESPNStandingEntryV3]   // 顶层就是队列表（≠ 之前的嵌套 children）
+    let standings: [ESPNStandingEntryV3]   // top level is the team table (≠ the old nested children)
 }
 struct ESPNStandingEntryV3: Codable {
-    let team: ESPNTeamRefV3               // 仅 $ref，需要二次 GET 拿详情
-    let records: [ESPNRecordV3]?          // 积分数据（如 points/W/D/L/GF/GA），赛季初可能为空
-    let stats: [ESPNStatV3]?              // 部分字段以 stats 形式挂载
+    let team: ESPNTeamRefV3               // often just a $ref; a second GET fetches details
+    let records: [ESPNRecordV3]?          // points data (points/W/D/L/GF/GA); may be empty early season
+    let stats: [ESPNStatV3]?              // some fields arrive as stats instead
     let rank: Int?
-    let note: ESPNStandingNoteV3?         // CL/EL/RELEGATION 等
+    let note: ESPNStandingNoteV3?         // CL/EL/RELEGATION etc.
 }
 struct ESPNTeamRefV3: Codable {
-    let id: String?                      // 部分端点返回 id 而非 $ref
-    let name: String?                    // 内联场景下
+    let id: String?                      // some endpoints return id instead of $ref
+    let name: String?                    // when inlined
     let shortName: String?
     let displayName: String?
     let logos: [ESPNLogoV3]?
     let abbreviation: String?
 
-    // CodingKeys：用 dollarRef 接收 $ref JSON 字段（Swift 不允许 $ 前缀属性名）
+    // CodingKeys: dollarRef receives the "$ref" JSON field (Swift disallows $ in property names)
     enum CodingKeys: String, CodingKey {
         case id, name, shortName, displayName, logos, abbreviation
         case dollarRef = "$ref"
@@ -145,14 +150,14 @@ struct ESPNStatV3: Codable {
     let displayValue: String?
 }
 struct ESPNStandingNoteV3: Codable {
-    let color: String?      // 例如 CL 蓝色 / EL 橙色 / R 红色
+    let color: String?      // e.g. CL blue / EL orange / R red
     let description: String?
     let rank: Int?
 }
 
-// MARK: - ESPN v3 events 端点模型
+// MARK: - ESPN v3 events models
 
-/// events 列表响应（paged）：顶层 items 是分页的赛事 $ref
+/// Events list response (paged): top-level `items` are paginated event `$ref`s.
 struct ESPNEventsListResponse: Codable {
     let count: Int?
     let pageIndex: Int?
@@ -160,11 +165,11 @@ struct ESPNEventsListResponse: Codable {
     let pageCount: Int?
     let items: [ESPNAbstractRef]
 }
-/// 通用 { "$ref": "..." } 格式（用于赛事/team $ref 列表项）
+/// Generic { "$ref": "..." } shape (for event/team list items).
 struct ESPNAbstractRef: Codable {
     let dollarRef: String?
     let id: String?
-    let name: String?     // 部分赛事列表会内联赛事短名
+    let name: String?     // some event lists inline a short name
     let date: String?
 
     enum CodingKeys: String, CodingKey {
@@ -173,14 +178,14 @@ struct ESPNAbstractRef: Codable {
     }
 }
 
-/// events 列表里的 item，如果赛事还没开始可能只有 $ref；
-/// 已结束赛事可能内联 name/date
+/// An event competitor: before kickoff it may carry only a `$ref`;
+/// finished events may inline name/date.
 struct ESPNCompetitorV3: Codable {
     let id: String?
     let homeAway: String?     // "home" / "away"
     let winner: Bool?
     let team: ESPNTeamRefV3?
-    /// 比分会内嵌到 ScoreV3 子对象（不总是有）
+    /// Score is nested in a ScoreV3 sub-object (not always present)
     let score: ESPNScoreV3?
 }
 struct ESPNScoreV3: Codable {
@@ -216,7 +221,7 @@ struct ESPNAddressV3: Codable {
     let city: String?
     let country: String?
 }
-/// v3 单场赛事（深层）
+/// A single v3 event (deep object).
 struct ESPNEventDetailV3: Codable {
     let id: String?
     let date: String?
@@ -225,21 +230,22 @@ struct ESPNEventDetailV3: Codable {
     let competitions: [ESPNCompetitionV3]?
 }
 
-// MARK: - v3 events 客户端与赛事聚合
+// MARK: - v3 events client
 
-/// ESPN v3 events 专用 fetcher：负责拉赛事列表 + 单场赛事详情（follow $ref）
-/// 配合 `StandingsAggregator` 从已结束赛事实时聚合积分榜。
+/// ESPN v3 events fetcher: pulls the event list plus per-event details
+/// (following `$ref`s). Works with `StandingsAggregator` to build live standings
+/// from finished events.
 enum ESPNEventsProvider {
-    /// 静态 User-Agent（v3 必须带 UA，否则 CDN 屏蔽返回空 {}）
+    /// Static User-Agent (v3 requires one; the default gets blocked to an empty {})
     private static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) EPLViewer/2.0"
 
-    /// 拉某日期范围内所有赛事 ID（去重，完整拉取多页）
-    /// - Parameter dates: `YYYYMMDD-YYYYMMDD` ESPN dates 格式
-    /// - Returns: 赛事 ID 列表（如 ["401879301", ...]）
+    /// Fetch all event IDs within a date range (deduplicated, follows pagination).
+    /// - Parameter dates: ESPN `YYYYMMDD-YYYYMMDD` dates format
+    /// - Returns: event IDs (e.g. ["401879301", ...])
     static func fetchEventIds(dates: String, limit: Int = 100) async throws -> [String] {
         var allIds: [String] = []
         var pageIndex = 1
-        // v3 events 端点分页；pageSize 默认 10，pageCount = ceil(count/10)
+        // The v3 events endpoint is paginated; pageSize defaults to 10, pageCount = ceil(count/10)
         while true {
             let url = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/events?dates=\(dates)&lang=en&region=us&limit=\(limit)&page=\(pageIndex)"
             let resp: ESPNEventsListResponse = try await fetchJSON(url)
@@ -252,18 +258,18 @@ enum ESPNEventsProvider {
             }
             guard let totalPages = resp.pageCount, pageIndex < totalPages else { break }
             pageIndex += 1
-            if pageIndex > 50 { break } // 防御：单赛季不超过 50 页
+            if pageIndex > 50 { break } // guard: a season never exceeds 50 pages
         }
         return Array(Set(allIds)).sorted()
     }
 
-    /// 拉单场赛事详情（已含 inline competitors，含 winner 字段；score 仍是 $ref）
+    /// Fetch one event's details (includes inline competitors with `winner`; score is still a $ref).
     static func fetchEventDetail(eventId: String) async throws -> ESPNEventDetailV3 {
         let url = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/events/\(eventId)?lang=en&region=us"
         return try await fetchJSON(url)
     }
 
-    /// 拉赛事某 competitor 的分数（v3 score 是 $ref）
+    /// Fetch one competitor's score (v3 keeps scores behind $refs).
     static func fetchCompetitorScore(eventId: String, competitorId: String) async throws -> Int {
         let url = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/events/\(eventId)/competitions/\(eventId)/competitors/\(competitorId)/score?lang=en&region=us"
         struct R: Codable { let value: Double? }
@@ -271,13 +277,13 @@ enum ESPNEventsProvider {
         return Int(r.value ?? 0)
     }
 
-    /// 拉单队详情（含 name/logos/abbreviation/venue/address）
+    /// Fetch one team's details (name/logos/abbreviation/venue/address).
     static func fetchTeam(teamId: String) async throws -> ESPNTeamRefV3 {
         let url = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/seasons/\(SeasonStore.currentSeason)/teams/\(teamId)?lang=en&region=us"
         return try await fetchJSON(url)
     }
 
-    /// JSON GET（自动加 User-Agent；失败抛 AppError）
+    /// JSON GET (adds the User-Agent; throws AppError on failure).
     private static func fetchJSON<T: Decodable>(_ urlString: String) async throws -> T {
         guard let url = URL(string: urlString) else { throw AppError.apiError(0) }
         var req = URLRequest(url: url)
@@ -297,7 +303,7 @@ enum ESPNEventsProvider {
     }
 }
 
-// ESPN 原生 JSON 模型（仅用于解码/编码缓存，后续翻译为内部模型）
+// ESPN legacy (v2 site API) JSON models (decode/cache only; translated to domain models afterwards)
 struct ESPNStandingsResponse: Codable {
     let children: [ESPNStandingGroup]?
 }
@@ -346,7 +352,8 @@ struct ESPNCompetitor: Codable {
     let score: ESPNScoreLite?
 }
 struct ESPNScoreLite: Codable {
-    /// scoreboard 端点的比分形态不统一：可能是 数字 3、字符串 "3"、或对象 {"value": 3}
+    /// The scoreboard endpoint's score is not uniform: it may be the number 3,
+    /// the string "3", or an object {"value": 3}.
     let value: Double?
     init(from decoder: Decoder) throws {
         if let keyed = try? decoder.container(keyedBy: CodingKeys.self),
@@ -377,18 +384,19 @@ struct ESPNStatusType: Codable {
     let state: String? // "pre" / "in" / "post"
 }
 
-// MARK: - FPL 公开 API Provider
+// MARK: - FPL public API provider
 
-/// FPL 公开 API 客户端（无需 Key）。`bootstrap-static` 一次拉全量，本地派生榜单。
+/// FPL public API client (no key). `bootstrap-static` pulls everything in one
+/// shot; leaderboards are derived locally from it.
 struct FPLProvider {
     let base = "https://fantasy.premierleague.com/api"
 
-    /// 拉取全量 bootstrap（球队/球员/位置/轮次）
+    /// Fetch the full bootstrap (teams / players / positions / gameweeks).
     func fetchBootstrap() async throws -> FPLBootstrap {
         try await get("\(base)/bootstrap-static/")
     }
 
-    /// 拉取全量赛程（含轮次 event、比分、开球时间）
+    /// Fetch the full fixture list (gameweek, scores, kickoff times).
     func fetchFixtures() async throws -> [FPLFixture] {
         try await get("\(base)/fixtures/")
     }
@@ -411,7 +419,7 @@ struct FPLProvider {
     }
 }
 
-// FPL 原生 JSON 模型
+// FPL native JSON models
 struct FPLBootstrap: Codable {
     let teams: [FPLTeam]
     let elements: [FPLPlayer]
@@ -434,7 +442,7 @@ struct FPLPlayer: Codable {
     let element_type: Int
     let goals_scored: Int
     let assists: Int
-    let status: String         // a=可出战, i=伤, d=存疑, u=缺阵, s=停赛, n=未注册
+    let status: String         // a=available, i=injured, d=doubtful, u=unavailable, s=suspended, n=not registered
     let news: String?
     let chance_of_playing_next_round: Int?
     let now_cost: Int?
@@ -450,14 +458,14 @@ struct FPLGameweek: Codable {
     let is_current: Bool?
     let is_next: Bool?
     let finished: Bool?
-    /// 该轮的最早截止时间（FPL 用作「该轮第一场开球的近似时间」，
-    /// 也作为「赛季总览」卡片的起始日显示依据）
+    /// The round's earliest deadline time (FPL treats it as an approximation of
+    /// the round's first kickoff; also used as the season-overview start date).
     let deadline_time: String?
 }
 
-/// FPL 单场赛程（/api/fixtures/ 返回）
+/// An FPL fixture (from /api/fixtures/).
 struct FPLFixture: Codable {
-    let event: Int?        // 轮次（gameweek）
+    let event: Int?        // gameweek
     let team_h: Int
     let team_a: Int
     let team_h_score: Int?
@@ -465,9 +473,10 @@ struct FPLFixture: Codable {
     let kickoff_time: String
     let finished: Bool
     let started: Bool?
-    /// 终场后 FPL 会先置 finished_provisional=true，finished 稍后才翻转；
-    /// 是「比赛已结束」更及时的可靠信号（不会在中场/进行中误触发）。
+    /// FPL sets finished_provisional=true at full time, flipping `finished` later;
+    /// it is the more timely, reliable "match is over" signal (never fires at
+    /// halftime / mid-match).
     let finished_provisional: Bool?
-    /// 进行分钟数（0=未开球，90=已结束）。兜底判定用。
+    /// Minutes played (0 = not kicked off, 90 = over). Fallback signal.
     let minutes: Int?
 }

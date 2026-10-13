@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// 顶部工具栏内容（仅保留手动刷新按钮）
-/// 说明：之前这里有三个 ToolbarItem — 刷新 / 数据来源徽标 / 设置入口。
-///   - 数据来源徽标（"在线" / "示例数据"）已移除，避免干扰主信息；
-///     真实回退场景下对应列表会为空，本身就是信号。
-///   - 设置入口已从工具栏移除，保留在左侧栏（"设置" 项）。
+/// Toolbar content (manual refresh button only).
+/// History: this used to hold three items — refresh / source badge / settings.
+///   - The source badge ("live" / "sample data") was removed to reduce noise; in a
+///     real fallback scenario the affected list is empty anyway, which is signal enough.
+///   - Settings moved to the sidebar ("Settings" entry).
 struct TopBar: ToolbarContent {
     @Environment(AppState.self) private var appState
 

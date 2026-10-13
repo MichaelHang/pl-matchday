@@ -1,19 +1,20 @@
 import Foundation
 
-// MARK: - 数据仓库（统一入口 + 回退 + 缓存）
+// MARK: - Data repository (single entry point + fallbacks + caching)
 
-// MARK: - 数据仓库（统一入口 + 回退 + 缓存）
-
-/// 统一的数据获取入口，负责「公开 API / 过期缓存（stale-if-error）」的回退决策与缓存。
-/// 网络失败时回退上次成功落盘的数据；无任何缓存（如首启即断网）返回空，UI 显示空状态。
+/// Unified data access: decides between public APIs and stale cache
+/// (stale-if-error). On network failure the last successfully persisted data is
+/// served; with no cache at all (e.g. offline on first launch) an empty result is
+/// returned and the UI shows its empty state.
 enum DataRepository {
-    // 缓存 key 前缀
+    // Cache keys
     private static let kBootstrap = "fpl_bootstrap"
     private static let kStandings = "espn_standings"
 
-    /// 是否应降级到下一级兜底（空数据 / 过期缓存）
-    /// - 降级：429（限频）/ 网络失败 / 无数据
-    /// - 上抛：403 / 400 等其它 HTTP 错误、解析错误
+    /// Whether the given error should fall through to the next fallback tier
+    /// (empty data / stale cache).
+    /// - Falls through: 429 (rate limited) / network failure / no data
+    /// - Rethrown: 403 / 400 and other HTTP errors, decoding errors
     static func shouldFallback(_ err: AppError) -> Bool {
         switch err {
         case .apiError(let code): return code == 429
@@ -23,18 +24,21 @@ enum DataRepository {
         }
     }
 
-    // MARK: 积分榜：fallback（v3 records → 已结束赛事聚合 → 过期缓存 → 空）
+    // MARK: Standings: v3 records → aggregate from fixtures → stale cache → empty
 
-    /// fallback 策略：
-    ///   1. v3 standings records 字段（ESPN 自带的官方积分榜，等赛后由 ESPN 自己填充）
-    ///   2. **本项目核心**：从赛程（FPL fixtures）已结束赛事实时聚合积分（不依赖 ESPN records）
-    ///   3. 网络失败时回退磁盘上的过期缓存（stale-if-error：赛程聚合若不可用，用上次落盘的 v3 榜）
-    ///   4. 彻底无数据 → 空数组（UI 显示「暂无数据」）
+    /// Fallback strategy:
+    ///   1. v3 standings `records` (ESPN's own table; ESPN fills it in after matches)
+    ///   2. **The core of this app**: aggregate points live from finished fixtures
+    ///      (FPL fixtures) — does not depend on ESPN populating records
+    ///   3. On network failure, the stale on-disk cache (stale-if-error: if fixture
+    ///      aggregation is unavailable, use the last persisted v3 table)
+    ///   4. Nothing at all → empty array (UI shows its empty state)
     ///
-    /// 用户痛点：英超第一轮已经踢完，但 v3 standings 的 records 字段可能真空很久未更新；
-    ///          因此 2 级 fallback 是必需的实时兜底，**不依赖 ESPN 自己攒 records**。
+    /// Motivation: matchday 1 can be long finished while ESPN's `records` field
+    /// stays empty for ages, so tier 2 is required as the live fallback and must
+    /// **not** wait on ESPN.
     static func standings() async throws -> ([StandingRow], DataSource) {
-        // 1. 尝试 v3 直接积分榜（如 records 已生成）
+        // 1. Try the direct v3 standings (if records exist)
         if let cached: ESPNStandingsCoreResponse = await CacheStore.shared.get(kStandings, ttl: CacheTTL.standings) {
             let rows = ESPNTranslator.standingRows(from: cached)
             if !rows.isEmpty { return (rows, .live) }
@@ -46,60 +50,65 @@ enum DataRepository {
             let rows = ESPNTranslator.standingRows(from: resp)
             if !rows.isEmpty { return (rows, .live) }
         } catch {
-            // v3 失败，跳到下一级
+            // v3 failed; fall through to the next tier
         }
 
-        // 2. 复用赛程（FPL fixtures / scoreboard）已结束赛事实时聚合积分（核心：不等 ESPN records）。
-        //    赛程本身是过期缓存时也能聚合 —— 内容真实，只是不新鲜，来源标 .stale。
+        // 2. Aggregate points from finished fixtures (FPL fixtures / scoreboard).
+        //    Works even when the fixtures themselves come from the stale cache —
+        //    real content, just not fresh; source is tagged accordingly.
         let (ms, src) = await DataRepository.matches()
         if src != .sample {
             let rows = StandingsAggregator.aggregate(matches: ms)
             if !rows.isEmpty { return (rows, src) }
         }
 
-        // 3. 过期的 v3 官方榜缓存（stale-if-error）
+        // 3. Stale v3 standings cache (stale-if-error)
         if let stale: ESPNStandingsCoreResponse = await CacheStore.shared.getStale(kStandings) {
             let rows = ESPNTranslator.standingRows(from: stale)
             if !rows.isEmpty { return (rows, .stale) }
         }
 
-        // 4. 彻底无数据
+        // 4. Nothing at all
         return ([], .sample)
     }
 
-    // MARK: 赛程（FPL fixtures 为主，ESPN scoreboard 兜底；网络失败回退过期缓存）
-    /// FPL fixtures 端点直接给出每场比赛的轮次（event）、真实比分、参赛队；
-    /// 参赛队映射到 FPL bootstrap teams（自带官方队徽 URL），是最稳的赛程来源。
-    /// TTL 内缓存命中后秒开；网络失败时回退上次落盘的赛程（忽略 TTL）。
+    // MARK: Fixtures (FPL fixtures first, ESPN scoreboard fallback, stale cache last)
+
+    /// The FPL fixtures endpoint provides matchday, real scores and both teams per
+    /// match; mapping teams onto FPL bootstrap teams yields official crests — the
+    /// most reliable fixtures source. A TTL hit opens instantly; on network failure
+    /// the last persisted fixtures are served (TTL ignored).
     static func matches() async -> ([Match], DataSource) {
         let cacheKey = fixturesCacheKey
-        // 1) 内存（同一生命周期内最快路径，切 tab 秒开）
+        // 1) Memory (fastest path within a session; instant tab switches)
         if let mem = await MemoryStore.shared.cachedFixtures(), !mem.isEmpty {
             return (mem, .live)
         }
-        // 2) 磁盘缓存（TTL 内）
+        // 2) Disk cache (within TTL)
         if let cached: [Match] = await CacheStore.shared.get(cacheKey, ttl: CacheTTL.fixtures), !cached.isEmpty {
             await MemoryStore.shared.cacheFixtures(cached)
             return (cached, .live)
         }
-        // 3) 网络取数（FPL → ESPN 兜底），整体 20 秒预算：超时不无限等。
+        // 3) Network (FPL → ESPN fallback) under a 20 s overall budget; no infinite waits.
         if let ms = await withTimeBudget(seconds: 20, operation: { await fetchMatchesFromNetwork() }) {
             await CacheStore.shared.set(cacheKey, value: ms)
             await MemoryStore.shared.cacheFixtures(ms)
             return (ms, .live)
         }
-        // 4) 网络失败/超时 → 上次成功落盘的赛程（忽略 TTL，stale-if-error）。
-        //    刻意**不**写入 MemoryStore：内存缓存只放新鲜数据，避免 stale 被后续路径当成 live。
+        // 4) Network failed/timed out → last persisted fixtures (TTL ignored, stale-if-error).
+        //    Deliberately **not** written into MemoryStore: the memory cache holds
+        //    fresh data only, so later paths can't mistake stale for live.
         if let stale: [Match] = await CacheStore.shared.getStale(cacheKey), !stale.isEmpty {
             return (stale, .stale)
         }
-        // 5) 彻底无数据（如首次安装且断网）→ 空数组，UI 显示「暂无赛程」
+        // 5) Nothing at all (e.g. offline on first launch) → empty array, UI shows empty state
         return ([], .sample)
     }
 
-    /// 网络取赛程：FPL fixtures 为主，ESPN scoreboard 兜底。任一级成功即返回。
-    /// 抽出来是为了能被 `withTimeBudget` 整体包住 —— 否则两级各 30 秒超时，
-    /// 最坏情况要等 60 秒才能确定「两级都失败」再走过期缓存兜底。
+    /// Network fetch for fixtures: FPL fixtures first, ESPN scoreboard fallback;
+    /// returns on the first tier that succeeds. Extracted so `withTimeBudget` can
+    /// wrap both tiers — otherwise each tier's 30 s timeout stacks up to 60 s
+    /// before the stale-cache fallback is even reached.
     private static func fetchMatchesFromNetwork() async -> [Match]? {
         if let ms = try? await loadFPLMatches() { return ms }
         if let ms = try? await loadScoreboardMatches() { return ms }
@@ -125,16 +134,17 @@ enum DataRepository {
         return ms
     }
 
-    /// 当前轮次（gameweek）：优先 is_current，其次 is_next，再次最新已结束轮，最后回退第 1 轮
+    /// Current gameweek: is_current first, then is_next, then the latest finished
+    /// round, finally round 1.
     static func currentGameweek() async -> Int? {
         guard let events = await gameweeks() else { return nil }
         return deriveCurrentRound(events)
     }
 
-    /// 纯函数：从 events 派生「当前轮次」。
-    /// 优先级 is_current > is_next > 最新已结束轮 > 首个轮次。
-    /// 独立成函数是为了让调用方能「一次取 events，同时拿到当前轮和赛季进度」，
-    /// 避免同一份 bootstrap 被反复解码。
+    /// Pure function: derive the "current round" from FPL events.
+    /// Priority: is_current > is_next > latest finished > first round.
+    /// A separate function so callers can fetch events once and get both the
+    /// current round and season progress without re-decoding the bootstrap.
     static func deriveCurrentRound(_ events: [FPLGameweek]) -> Int? {
         if let cur = events.first(where: { $0.is_current == true }) { return cur.id }
         if let nxt = events.first(where: { $0.is_next == true }) { return nxt.id }
@@ -142,8 +152,9 @@ enum DataRepository {
         return events.first?.id
     }
 
-    /// 完整 gameweek 列表（含 is_current/is_next/finished/deadline_time），
-    /// 供「赛季总览」用 —— 比 currentGameweek 更重，但只调一次（走内存缓存后几乎零成本）。
+    /// Full gameweek list (is_current / is_next / finished / deadline_time) for the
+    /// season overview — heavier than `currentGameweek`, but fetched once and then
+    /// served from the memory cache at ~zero cost.
     static func gameweeks() async -> [FPLGameweek]? {
         do {
             let (bootstrap, _) = try await loadOrFetchBootstrap()
@@ -153,7 +164,7 @@ enum DataRepository {
         }
     }
 
-    // MARK: 球队 / 球员（从 FPL bootstrap 派生）
+    // MARK: Teams / players (derived from the FPL bootstrap)
 
     static func teams() async throws -> ([Team], DataSource) {
         do {
@@ -179,7 +190,7 @@ enum DataRepository {
         }
     }
 
-    // MARK: 射手榜 / 助攻榜 / 伤停榜
+    // MARK: Scorers / assists / injuries
 
     static func scorers() async throws -> ([Scorer], DataSource) {
         do {
@@ -217,19 +228,20 @@ enum DataRepository {
         }
     }
 
-    // MARK: 内部：bootstrap 加载（带缓存 + stale 兜底）
+    // MARK: Internal: bootstrap loading (cached, with stale fallback)
 
-    /// 返回 `(bootstrap, 来源)`。网络失败时回退磁盘上的过期缓存（stale-if-error），
-    /// 上层派生端点（球队 / 射手 / 助攻 / 伤停 / 轮次）因此无需各自写兜底。
+    /// Returns `(bootstrap, source)`. Falls back to the stale disk cache on network
+    /// failure (stale-if-error), so derived endpoints (teams / scorers / assists /
+    /// injuries / gameweeks) don't need fallbacks of their own.
     private static func loadOrFetchBootstrap() async throws -> (bootstrap: FPLBootstrap, source: DataSource) {
-        // 1) 内存：同一生命周期内直接命中，零 IO 零解码
+        // 1) Memory: instant hit within a session, zero IO and zero decoding
         if let mem = await MemoryStore.shared.cachedBootstrap() { return (mem, .live) }
-        // 2) 磁盘缓存（TTL 内）
+        // 2) Disk cache (within TTL)
         if let cached: FPLBootstrap = await CacheStore.shared.get(kBootstrap, ttl: CacheTTL.bootstrap) {
             await MemoryStore.shared.cacheBootstrap(cached)
             return (cached, .live)
         }
-        // 3) 网络；失败时回退过期缓存，仍拿不到才上抛
+        // 3) Network; on failure fall back to the stale cache, rethrow only if that fails too
         do {
             let resp = try await FPLProvider().fetchBootstrap()
             await CacheStore.shared.set(kBootstrap, value: resp)
@@ -243,21 +255,23 @@ enum DataRepository {
         }
     }
 
-    // MARK: 主动操作
+    // MARK: Manual operations
 
-    /// 清空所有缓存（设置面板调用，下次访问会重新拉取）
+    /// Clear all caches (Settings panel); the next access refetches.
     static func clearCache() async {
         await CacheStore.shared.clear()
-        // 必须同时清内存，否则清完磁盘仍会命中内存里的旧数据，手动刷新拿不到最新结果
+        // Memory must be cleared too, otherwise cleared disk data is still served
+        // from memory and a manual refresh doesn't get fresh results.
         await MemoryStore.shared.clear()
     }
 
-    /// 赛程缓存 key（与 matches() 内部一致），供「只失效赛程」复用
+    /// Fixtures cache key (matches the one used inside `matches()`), shared with
+    /// the fixtures-only invalidation path.
     static var fixturesCacheKey: String { "fpl_fixtures_\(SeasonStore.currentSeason)" }
 
-    /// 只失效赛程缓存（内存 + 磁盘），保留 bootstrap / 积分榜等。
-    /// 比赛期间自动刷新轮询调用：只刷新比分来源（matches），
-    /// 不再每 60s 重下整份 FPL bootstrap / 积分榜。
+    /// Invalidate only the fixtures cache (memory + disk); bootstrap / standings etc.
+    /// are kept. Called by the live-match polling loop so each 60 s tick refreshes
+    /// the scores source without re-downloading the whole FPL bootstrap / standings.
     static func invalidateFixtures() async {
         await MemoryStore.shared.clearFixtures()
         await CacheStore.shared.remove(fixturesCacheKey)

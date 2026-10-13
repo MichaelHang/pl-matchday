@@ -1,46 +1,46 @@
 import SwiftUI
 
-// MARK: - 模式
+// MARK: - Modes
 
-/// 赛程页的查看模式
-/// - `.thisRound` 单轮详情（默认，进入时停留在 `focusedRound`）
-/// - `.season` 赛季总览（所有轮次卡片网格，点击进入对应轮次详情）
+/// Fixtures page view mode.
+/// - `.thisRound` single-round detail (default; lands on `focusedRound`)
+/// - `.season` season overview (grid of round cards; tapping opens that round)
 enum FixturesMode: Equatable {
     case thisRound
     case season
 }
 
-/// 轮次在赛季里的进度状态（用于总览卡片角标颜色）
+/// A round's progress within the season (colors the overview card dot).
 enum RoundProgress {
-    /// 已踢完
+    /// Played
     case past
-    /// 当前轮（正在踢或即将踢）
+    /// Current round (live or upcoming)
     case current
-    /// 未来轮次
+    /// Future rounds
     case future
-    /// 该轮暂无数据（不在 availableRounds 内，例如下一轮还没发赛程）
+    /// No data for this round yet (not in availableRounds; next round's fixtures unpublished)
     case unknown
 }
 
-// MARK: - 赛季进度 / 轮次快照
+// MARK: - Season progress / round snapshots
 
-/// 赛季进度汇总（顶部进度条用）
+/// Season progress summary (top progress bar).
 struct SeasonProgress: Equatable {
-    /// 当前轮次（is_current > is_next > 最近已结束）
+    /// Current round (is_current > is_next > latest finished)
     let currentRound: Int
-    /// 总轮次（取 FPL events 末位；FPL 拿不到时默认 38）
+    /// Total rounds (last FPL event; defaults to 38 when FPL is unavailable)
     let totalRounds: Int
-    /// 已踢轮次（bootstrap.events.finished=true 的计数）
+    /// Played rounds (count of bootstrap.events with finished=true)
     let playedRounds: Int
-    /// 剩余轮次
+    /// Remaining rounds
     let remainingRounds: Int
-    /// 已踢百分比 0..1
+    /// Played fraction 0..1
     let fraction: Double
-    /// 取第一轮 deadline_time 的年份（不可得则取当前年）
+    /// Year of the first round's deadline_time (falls back to the current year)
     let seasonYear: Int
 }
 
-/// 一个轮次的「快照」—— 赛季总览卡片用
+/// A round's "snapshot" — used by the season-overview cards.
 struct RoundSnapshot: Identifiable {
     let round: Int
     let startDate: Date?
@@ -51,11 +51,12 @@ struct RoundSnapshot: Identifiable {
 
 // MARK: - ViewModel
 
-/// 赛程视图模型（@Observable）
+/// Fixtures view model (@Observable).
 @Observable
 final class FixturesViewModel {
-    /// 比赛全集。赋值即自动重建索引 —— 保证「按轮次分桶 / 每轮最早开球」
-    /// 这两个索引永远和数据同步（手动赋值、测试注入也一样）。
+    /// The full match set. Assignment automatically rebuilds the indexes so the
+    /// "per-round buckets / per-round earliest kickoff" indexes always match the
+    /// data (manual assignment and test injection included).
     var matches: [Match] = [] {
         didSet {
             rebuildIndexes()
@@ -64,94 +65,102 @@ final class FixturesViewModel {
     }
     var source: DataSource = .sample
     var error: AppError?
-    /// 模式：本轮 / 赛季总览
+    /// Mode: this round / season overview.
     var mode: FixturesMode = .thisRound
-    /// 当前正在查看的轮次 —— 「本轮」模式下展示它，
-    /// 「赛季总览」下的卡片点击会改写它后切回 `.thisRound`。
-    /// 改值（初始聚焦当前轮、或点总览卡片跳过来）会自动把轮次窗口对齐到它。
-    /// 已在窗口内则不动 —— 这样点窗口里某个 chip 不会让窗口跳来跳去。
-    /// ⚠️ 翻页**不改** focusedRound，所以翻页不会触发这里，窗口不会被拉回去。
+    /// The round being viewed — shown in "this round" mode; tapping an overview card
+    /// rewrites it and switches back to `.thisRound`. Changing it (initial focus, or
+    /// jumping from an overview card) aligns the round window to it; when already in
+    /// the window it stays put so tapping a chip never makes the window jump.
+    /// ⚠️ Paging does **not** touch focusedRound, so paging never triggers this.
     var focusedRound: Int = 1 {
         didSet { alignWindowToFocusedRound() }
     }
-    /// 是否已完成过「首次聚焦当前轮」。
-    /// ⚠️ `load()` 在每次手动刷新 / 比赛日 60s 自动轮询时都会重新执行；
-    /// 聚焦只该发生在**首次拿到数据**时 —— 否则用户正翻看的轮次会被刷新拽回当前轮。
+    /// Whether the "initial focus on the current round" already happened.
+    /// ⚠️ `load()` reruns on every manual refresh and every 60 s matchday poll;
+    /// focusing must happen only on the **first** data load — otherwise the round
+    /// the user is browsing gets yanked back to the current round by every refresh.
     @ObservationIgnored private var didFocusInitialRound = false
-    /// 真正「当前」轮（来自 FPL is_current/is_next），仅用于初始化和进度文案。
-    /// 它参与 `roundSnapshots` 的 past/current/future 判定，所以改值要让快照缓存失效。
+    /// The real "current" round (from FPL is_current/is_next), used for initial
+    /// focusing and progress copy. It feeds `roundSnapshots`' past/current/future
+    /// decision, so changing it invalidates the snapshot cache.
     var currentRound: Int = 1 {
         didSet { invalidateSnapshotCache() }
     }
-    /// 有比赛的轮次列表（升序，来自 FPL fixtures 数据）。
-    /// 列表长度一变，窗口起点可能就越界，所以要立刻夹回合法区间。
+    /// Rounds that have matches (ascending, from FPL fixtures).
+    /// A length change can push the window start out of bounds → clamp immediately.
     var availableRounds: [Int] = [] {
         didSet { clampWindowStart() }
     }
-    /// 赛季进度（赛季总览 header 用；首次 load 时填充）。
-    /// 它是 `roundSnapshots` 的直接入参之一，改值要让快照缓存失效。
+    /// Season progress (season-overview header; filled on first load). A direct input
+    /// of `roundSnapshots`, so changing it invalidates the snapshot cache.
     var seasonProgress: SeasonProgress? {
         didSet { invalidateSnapshotCache() }
     }
 
-    // MARK: 轮次窗口（chip bar 固定窗口分页）
+    // MARK: Round window (fixed-size chip-bar pagination)
     //
-    // chip bar 不再一次列出全部轮次：38 轮尚可，轮次数涨到几百上千会拖垮布局阶段。
-    // 改成「固定大小窗口 + 左右翻页」—— 一次最多渲染 `roundWindowSize` 个 chip，
-    // 渲染量与总轮次数无关。
+    // The chip bar doesn't list every round at once: 38 rounds is fine, but rounds
+    // growing into the hundreds would bog down layout. A fixed-size window with
+    // paging renders at most `roundWindowSize` chips — render cost is independent
+    // of the total round count.
 
-    /// 窗口大小：chip bar 一次显示的轮次数量
+    /// Window size: how many rounds the chip bar shows at once.
     static let roundWindowSize = 5
-    /// 窗口在 `availableRounds` 里的起始下标。
-    /// 放 ViewModel（而不是 View 的 `@State`）是为了可测试；
-    /// 它是**参与观察**的普通属性 —— 窗口翻页了 UI 必须重绘。
+    /// The window's start index into `availableRounds`.
+    /// Lives in the ViewModel (not a View `@State`) for testability; it is an
+    /// **observed** property — paging must redraw the UI.
     var roundWindowStart: Int = 0
 
-    // MARK: 预计算索引
+    // MARK: Precomputed indexes
     //
-    // ⚠️ 38 个轮次 chip 每个都要「该轮最早开球时间」，如果每次都全表扫描 380 场，
-    // 就是 38 × 380 = 14440 次 parse —— 且发生在 SwiftUI body 求值路径上，
-    // 任何一次重绘都会重跑，主线程直接卡死。所以 load 时一次遍历建好索引。
+    // ⚠️ Each of the 38 round chips needs its round's earliest kickoff; scanning all
+    // 380 matches per chip is 38 × 380 = 14,440 parses — on the SwiftUI body
+    // evaluation path, rerun by every redraw, freezing the main thread. So the
+    // indexes are built in one pass at load time.
 
-    /// 每轮的最早开球时间（UTC Date）—— chip 的「M月d日」后缀与分组都靠它
+    /// Earliest kickoff per round (UTC) — feeds the chip date suffix and grouping.
     private(set) var roundStartUTC: [Int: Date] = [:]
-    /// 按轮次分桶的比赛（桶内已按开球时间升序）
+    /// Matches bucketed by round (buckets sorted by kickoff ascending).
     private(set) var matchesByRound: [Int: [Match]] = [:]
 
-    // MARK: 赛季总览快照缓存
+    // MARK: Season-overview snapshot cache
     //
-    // ⚠️ `roundSnapshots(seasonProgress:)` 直接在 SwiftUI body 求值路径上被调用，
-    // 每次重绘都要遍历全部轮次、为每轮生成含 ≤3 场预览的快照 —— O(轮数 × 预览数)。
-    // 38 轮无感，轮次数涨到几百上千就是每次重绘几千条，主线程直接被吃满。
-    // 所以这里按「输入是否变化」缓存：输入没变就直接返回上一次的结果。
+    // ⚠️ `roundSnapshots(seasonProgress:)` is called on the SwiftUI body evaluation
+    // path; every redraw would iterate all rounds and build a ≤3-preview snapshot
+    // each — O(rounds × previews). 38 rounds is imperceptible, but hundreds of rounds
+    // would saturate the main thread. Cache by input: unchanged inputs return the
+    // previous result directly.
 
-    /// 快照缓存的判定 key —— 覆盖所有能改变快照结果的输入
+    /// Snapshot cache key — covers every input that can change the result.
     private struct SnapshotCacheKey: Equatable {
-        /// 索引版本号（`matches` 每次重建索引都会自增）
+        /// Index version (bumped each time `matches` rebuilds the indexes)
         let indexGeneration: Int
-        /// 当前轮：决定快照的 past / current / future 状态
+        /// Current round: decides past / current / future state
         let currentRound: Int
-        /// 赛季进度：决定总轮数与当前轮（为 nil 时走 `currentRound` 兜底）
+        /// Season progress: decides total rounds and current round (nil falls back to `currentRound`)
         let seasonProgress: SeasonProgress?
     }
 
-    /// 索引版本号。用它替代「对全部比赛做一遍指纹」来判断数据是否变过，O(1)。
-    /// `roundStartUTC` / `matchesByRound` / `availableRounds` 三个索引都由 `matches` 派生，
-    /// 所以它们同步失效 —— 一个版本号足够覆盖。
+    /// Index version. Replaces "fingerprint all matches" with an O(1) change test.
+    /// `roundStartUTC` / `matchesByRound` / `availableRounds` all derive from
+    /// `matches`, so one version covers them all.
     ///
-    /// ⚠️ 标 `@ObservationIgnored`：body 从不读它，不该参与 @Observable 的依赖追踪。
+    /// ⚠️ `@ObservationIgnored`: the body never reads it; it shouldn't join the
+    /// @Observable dependency tracking.
     @ObservationIgnored private var indexGeneration: Int = 0
-    /// 上一次算出的快照结果
+    /// Last computed snapshots.
     @ObservationIgnored private var snapshotCache: [RoundSnapshot]?
-    /// 生成 `snapshotCache` 时的输入 key
+    /// The input key that produced `snapshotCache`.
     @ObservationIgnored private var snapshotCacheKey: SnapshotCacheKey?
-    /// 缓存**未命中**（真正重算）的次数。仅供测试断言「第二次调用没有重算」，UI 不使用。
+    /// Number of cache **misses** (actual recomputations). Only used by tests
+    /// asserting "the second call didn't recompute"; not used by the UI.
     @ObservationIgnored private(set) var roundSnapshotsComputeCount: Int = 0
 
-    /// 作废快照缓存。索引重建 / 当前轮变化 / 赛季进度变化都会走到这里。
+    /// Invalidate the snapshot cache. Index rebuilds / current-round changes /
+    /// season-progress changes all land here.
     ///
-    /// 真正的判定由 `SnapshotCacheKey` 兜底（key 不匹配就自动重算），
-    /// 这里显式清空只是多一层保险，成本可忽略。
+    /// `SnapshotCacheKey` is the real gate (a key mismatch recomputes anyway);
+    /// clearing explicitly is just a cheap extra safety net.
     private func invalidateSnapshotCache() {
         snapshotCache = nil
         snapshotCacheKey = nil
@@ -160,21 +169,25 @@ final class FixturesViewModel {
     @MainActor
     func load() async {
         let (data, src) = await DataRepository.matches()
-        matches = data // didSet 会重建索引并刷新 availableRounds
+        matches = data // didSet rebuilds the indexes and refreshes availableRounds
         source = src
         error = nil
-        // 只取一次 events，同时用于「当前轮」和「赛季进度」——
-        // 之前这里各调一次（currentGameweek + gameweeks），同一份 bootstrap 被解码两遍。
+        // Fetch events once for both "current round" and "season progress" —
+        // these used to be two calls (currentGameweek + gameweeks), decoding the
+        // same bootstrap twice.
         //
-        // ⚠️ 且必须给时间预算：FPL bootstrap-static 实测会慢到几十秒仍不结束，
-        // 而「当前轮 / 赛季进度」只是锦上添花。拿不到就用比赛数据本地推断，
-        // 绝不能让它拖住首屏 —— 否则表现就是「进了赛程页一直转圈」。
+        // ⚠️ And it needs a time budget: the FPL bootstrap has been observed hanging
+        // for tens of seconds, while "current round / progress" is nice-to-have. Fall
+        // back to local inference — never let this hold the first screen, or the
+        // fixtures page would spin forever.
         let events = await withTimeBudget(seconds: 8) { await DataRepository.gameweeks() }
         currentRound = events.flatMap { DataRepository.deriveCurrentRound($0) }
             ?? inferCurrentRoundFromMatches()
             ?? 1
-        // 只在「首次拿到数据」时聚焦 currentRound（该轮无数据则回退首个有数据的轮次）；
-        // 之后的刷新不动 focusedRound —— 走预计算索引 O(1) 判断，不再 O(n) 扫 380 场。
+        // Focus the current round only on the **first** data load (falling back to the
+        // first round with data when it has none); later refreshes never touch
+        // focusedRound — an O(1) lookup on the precomputed index instead of an O(n)
+        // scan over 380 matches.
         if !didFocusInitialRound, !availableRounds.isEmpty {
             didFocusInitialRound = true
             focusedRound = Self.initialFocusRound(
@@ -186,8 +199,9 @@ final class FixturesViewModel {
         await loadSeasonProgress(events: events)
     }
 
-    /// 首次拿到赛程时该聚焦到哪个轮次（纯函数，便于单测）：
-    /// 当前轮有数据 → 当前轮；否则第一个有数据的轮次；全都没有 → 当前轮。
+    /// Which round to focus when fixtures first arrive (pure function, testable):
+    /// current round with data → current round; otherwise the first round with data;
+    /// nothing at all → current round.
     static func initialFocusRound(currentRound: Int,
                                   availableRounds: [Int],
                                   matchesByRound: [Int: [Match]]) -> Int {
@@ -195,9 +209,9 @@ final class FixturesViewModel {
         return availableRounds.first ?? currentRound
     }
 
-    /// 从 FPL events 读出赛季进度（已踢轮数 / 总数 / 当前轮 / 年份）。
-    /// 失败时按 38 轮 + 0% 兜底，确保 UI 仍有渲染内容。
-    /// - Parameter events: 由 `load()` 一次性取好传入，本方法不再重复取数。
+    /// Read season progress from FPL events (played / total / current round / year).
+    /// On failure falls back to 38 rounds at 0% so the UI still renders something.
+    /// - Parameter events: fetched once by `load()` and passed in; no refetch here.
     @MainActor
     func loadSeasonProgress(events: [FPLGameweek]? = nil) async {
         let resolvedEvents: [FPLGameweek]?
@@ -241,25 +255,25 @@ final class FixturesViewModel {
         )
     }
 
-    /// 按模式 + 轮次过滤后的比赛，按开球时间升序。
-    /// 直接取预计算桶（桶内已排好序），O(1)；不再对 380 场做 filter + sort。
+    /// Matches for the current mode + round, ascending by kickoff.
+    /// Reads the precomputed bucket directly — O(1), no filter+sort over 380 matches.
     var displayed: [Match] {
         matchesByRound[focusedRound] ?? []
     }
 
-    // MARK: - 索引构建
+    // MARK: - Index building
 
-    /// 拿不到 FPL events 时的兜底：用已有的比赛数据本地推断「当前轮」。
-    /// 具体规则见 `CurrentRoundInference`（赛程页与今日页共用同一套规则）。
-    /// （internal 而非 private：供单元测试覆盖这条兜底路径）
+    /// Fallback when FPL events are unavailable: infer the current round locally from
+    /// fixtures. Rules in `CurrentRoundInference` (shared by fixtures & today pages).
+    /// (internal, not private: unit tests cover this fallback path)
     func inferCurrentRoundFromMatches() -> Int? {
         CurrentRoundInference.infer(from: matches)
     }
 
-    /// 一次遍历建好「按轮次分桶」与「每轮最早开球时间」两个索引。
-    /// 之后所有查询都是 O(1) 取桶，不再全表扫描。
+    /// Build both indexes in one pass: per-round buckets + earliest kickoff per round.
+    /// All lookups afterwards are O(1) bucket reads, never full scans.
     private func rebuildIndexes() {
-        // 索引换新 → 派生的快照结果一并作废
+        // New indexes → derived snapshots are invalidated too
         indexGeneration += 1
         invalidateSnapshotCache()
         var byRound: [Int: [Match]] = [:]
@@ -275,7 +289,7 @@ final class FixturesViewModel {
                 }
             }
         }
-        // 桶内按开球时间升序（ISO8601 字符串字典序 == 时间序）
+        // Sort each bucket by kickoff ascending (ISO8601 string order == time order)
         for (r, list) in byRound {
             byRound[r] = list.sorted { ($0.utcDate ?? "") < ($1.utcDate ?? "") }
         }
@@ -283,24 +297,24 @@ final class FixturesViewModel {
         roundStartUTC = earliest
     }
 
-    // MARK: - 轮次元数据
+    // MARK: - Round metadata
 
-    /// 某个轮次的最早开球时间（UTC）→ 用于 chip/卡片显示「M月d日」。
-    /// 查预计算索引，O(1)；时区换算交给格式化函数，不在这里做。
+    /// A round's earliest kickoff (UTC) → the chip/card date label. O(1) index
+    /// lookup; time-zone conversion is the formatter's job, not this one's.
     func roundStart(_ round: Int) -> Date? {
         roundStartUTC[round]
     }
 
-    // MARK: - 轮次窗口（chip bar 分页）
+    // MARK: - Round window (chip-bar pagination)
 
-    /// 窗口起始下标的合法上界。
-    /// 轮次数不足一屏时为 0 —— 此时窗口没法挪动，两个翻页箭头都该隐藏。
+    /// Legal upper bound for the window start.
+    /// 0 when fewer rounds than a window — the arrows should be hidden then.
     var roundWindowMaxStart: Int {
         max(0, availableRounds.count - FixturesViewModel.roundWindowSize)
     }
 
-    /// 窗口内可见的轮次编号（至多 `roundWindowSize` 个）。
-    /// 起点先夹回合法区间再切片，保证任何状态下都不越界。
+    /// Visible round numbers (at most `roundWindowSize`). The start is clamped into
+    /// range before slicing, so no state can index out of bounds.
     var visibleRounds: [Int] {
         let start = min(max(roundWindowStart, 0), roundWindowMaxStart)
         guard start < availableRounds.count else { return [] }
@@ -308,22 +322,24 @@ final class FixturesViewModel {
         return Array(availableRounds[start..<end])
     }
 
-    /// 把 `roundWindowStart` 夹回 `[0, roundWindowMaxStart]` 并写回。
-    /// 数据刷新导致 `availableRounds` 变短时靠它兜底。
+    /// Clamp `roundWindowStart` back into `[0, roundWindowMaxStart]`.
+    /// Safety net when a refresh shrinks `availableRounds`.
     func clampWindowStart() {
         roundWindowStart = min(max(roundWindowStart, 0), roundWindowMaxStart)
     }
 
-    /// 把窗口重新定位到包含 `focusedRound` 的位置。
+    /// Re-position the window so it contains `focusedRound`.
     ///
-    /// 对齐规则（以 `availableRounds` 为有序数组）：
-    /// - 中间：以 `focusedRound` 为中心，前 2 后 2（窗口大小 5 → 偏移 `5 / 2 = 2`）
-    /// - 靠左/靠右：起点被夹到 0 / 上界，等价于窗口左对齐 / 右对齐
-    /// - 轮次总数 ≤ 窗口大小：直接归零（全部轮次都显示，无需对齐）
+    /// Alignment rules (over the ordered `availableRounds`):
+    /// - middle: center on `focusedRound`, 2 before / 2 after (size 5 → offset 5 / 2 = 2)
+    /// - near edges: start clamps to 0 / the bound, i.e. left/right alignment
+    /// - total rounds ≤ window size: start at 0 (everything visible, nothing to align)
     ///
-    /// 两种情况下**保持不动**，不动是刻意的：
-    /// - `focusedRound` 已经在窗口内（包括翻页后用户只是移动了取景框、没换选中的轮）→ 不重排，保持视窗稳定
-    /// - `focusedRound` 不在 `availableRounds` 里（该轮暂无数据）→ 没有可对齐的位置
+    /// Two cases deliberately **stay put**:
+    /// - `focusedRound` already inside the window (including after paging — the user
+    ///   moved the viewport without changing rounds) → keep the viewport stable;
+    /// - `focusedRound` not in `availableRounds` (no data for that round) → nothing
+    ///   to align to.
     func alignWindowToFocusedRound() {
         let size = FixturesViewModel.roundWindowSize
         if availableRounds.count <= size {
@@ -333,28 +349,29 @@ final class FixturesViewModel {
         guard !visibleRounds.contains(focusedRound),
               let idx = availableRounds.firstIndex(of: focusedRound)
         else { return }
-        // count > size 在这里恒成立，所以 maxStart > 0，夹取结果不会越界
+        // count > size always holds here, so maxStart > 0 and the clamp can't go out of bounds
         let maxStart = availableRounds.count - size
         roundWindowStart = min(max(idx - size / 2, 0), maxStart)
     }
 
-    /// 向左翻一页（上一组轮次）。
-    /// **只移动窗口，不改 `focusedRound`** —— 当前选中的那一轮保持高亮，
-    /// 内容区也继续显示它。窗口纯粹是 chip 的导航取景框，只有点 chip 才切换选中轮。
+    /// Page one window left (earlier rounds).
+    /// **Moves only the window, never `focusedRound`** — the selected round stays
+    /// highlighted and on screen. The window is purely a viewport; only tapping a
+    /// chip changes the selected round.
     func pageRoundsBackward() {
         roundWindowStart = max(roundWindowStart - FixturesViewModel.roundWindowSize, 0)
         clampWindowStart()
     }
 
-    /// 向右翻一页（下一组轮次）。同样只移动窗口，不改 `focusedRound`。
+    /// Page one window right (later rounds). Same: window only, not `focusedRound`.
     func pageRoundsForward() {
         roundWindowStart = roundWindowStart + FixturesViewModel.roundWindowSize
         clampWindowStart()
     }
 
-    // MARK: - 按 (轮次, 日期) 分组
+    // MARK: - Grouping by (round, date)
 
-    /// 返回按日期分组的数据；每天一节，节内按开球升序
+    /// Date-grouped sections; one section per local day, ascending kickoffs within.
     func groupedSections(tz: TimeZone) -> [FixturesSection] {
         let list = matchesByRound[focusedRound] ?? []
         var cal = Calendar(identifier: .gregorian)
@@ -373,14 +390,14 @@ final class FixturesViewModel {
             .sorted { $0.date < $1.date }
     }
 
-    // MARK: - 赛季总览快照
+    // MARK: - Season-overview snapshots
 
-    /// 给赛季总览卡片网格用：每个轮次一张快照，
-    /// 卡内最多 3 场预览（开球升序前 3 场）。
-    /// 全部走预计算索引，不做任何全表扫描。
+    /// One snapshot per round for the overview grid; at most 3 previews per card
+    /// (first 3 by kickoff). Reads only the precomputed indexes, never full scans.
     ///
-    /// 结果按输入缓存：`matches`（经 `indexGeneration`）/ `currentRound` / `seasonProgress`
-    /// 三者都没变时直接返回上一次的结果，避免 body 每次重绘都 O(轮数 × 预览数) 重算。
+    /// Cached by input: when `matches` (via `indexGeneration`) / `currentRound` /
+    /// `seasonProgress` are all unchanged, the previous result is returned directly so
+    /// body redraws don't pay O(rounds × previews) every time.
     func roundSnapshots(seasonProgress: SeasonProgress?) -> [RoundSnapshot] {
         let key = SnapshotCacheKey(
             indexGeneration: indexGeneration,
@@ -404,9 +421,9 @@ final class FixturesViewModel {
             } else {
                 progress = .future
             }
-            // 直接取预计算桶，避免 38 轮 × 380 场的重复全表扫描
+            // Read the precomputed bucket directly; no 38 × 380 rescans
             let items = matchesByRound[r] ?? []
-            // 哪怕本季暂无该轮数据，也展示空快照（占位）
+            // Rounds without data this season still get an empty (placeholder) snapshot
             result.append(RoundSnapshot(
                 round: r,
                 startDate: roundStartUTC[r],
@@ -421,24 +438,25 @@ final class FixturesViewModel {
     }
 }
 
-/// 一节 = 某个本地日期下的若干场比赛
+/// One section = a local date with its matches.
 struct FixturesSection: Identifiable {
     var date: Date
     var matches: [Match]
     var id: Date { date }
 }
 
-// MARK: - 日期工具
+// MARK: - Date utilities
 
-// ⚠️ 性能关键区：这些方法都在 SwiftUI body 求值路径上被调用，
-// 而赛程页一次要渲染 380 场比赛 + 38 个轮次 chip。
-// 每次新建 DateFormatter / ISO8601DateFormatter 会让主线程直接卡死
-// （DateFormatter 构造成本极高），所以一律走缓存池。
+// ⚠️ Performance-critical zone: these run on the SwiftUI body evaluation path, and
+// the fixtures page renders 380 matches + 38 round chips at once. Constructing a
+// DateFormatter / ISO8601DateFormatter per call stalls the main thread (their
+// construction is expensive), so everything goes through the shared pool.
 
-/// 格式化器缓存池。
+/// Formatter cache pool.
 ///
-/// Swift 6 严格并发下全局 `var` 会报 MutableGlobalVariable，所以收进这个单例；
-/// 内部用 NSLock 保护，对 Swift 6 标注 `@unchecked Sendable`。
+/// Under Swift 6 strict concurrency a global mutable `var` is rejected
+/// (MutableGlobalVariable), so it lives in this singleton; guarded by an NSLock and
+/// annotated `@unchecked Sendable`.
 private final class FormatterPool: @unchecked Sendable {
     static let shared = FormatterPool()
 
@@ -457,7 +475,7 @@ private final class FormatterPool: @unchecked Sendable {
         return f
     }()
 
-    /// 按 时区 + 语言 + 格式 唯一键复用 DateFormatter 实例
+    /// Reuse DateFormatter instances keyed by time zone + language + format.
     func formatter(tz: TimeZone, localeID: String, format: String) -> DateFormatter {
         let key = "\(tz.identifier)|\(localeID)|\(format)"
         lock.lock()
@@ -472,7 +490,7 @@ private final class FormatterPool: @unchecked Sendable {
     }
 }
 
-/// 「8月29日 / Aug 29」短日期
+/// Short date "Aug 29 / 8月29日".
 private func formatShortDate(_ d: Date, tz: TimeZone, lang: AppLanguage) -> String {
     let df = FormatterPool.shared.formatter(
         tz: tz,
@@ -481,7 +499,7 @@ private func formatShortDate(_ d: Date, tz: TimeZone, lang: AppLanguage) -> Stri
     return df.string(from: d)
 }
 
-/// 「8月29日 星期六 / Sat, Aug 29」
+/// Section header "Sat, Aug 29 / 8月29日 星期六".
 private func formatDateHeader(_ d: Date, tz: TimeZone, lang: AppLanguage) -> String {
     let df = FormatterPool.shared.formatter(
         tz: tz,
@@ -490,18 +508,19 @@ private func formatDateHeader(_ d: Date, tz: TimeZone, lang: AppLanguage) -> Str
     return df.string(from: d)
 }
 
-// MARK: - 视图
+// MARK: - View
 
-/// 赛程
-/// - `.thisRound` 模式：聚焦当前轮（默认）或用户从总览点入的某一轮，按日期分组展示全部比赛
-/// - `.season`    模式：赛季总览卡片网格，点卡片回到 `.thisRound` 看该轮详情
+/// Fixtures.
+/// - `.thisRound`: focused on the current round (default) or a round entered from the
+///   overview; all matches grouped by date.
+/// - `.season`: overview card grid; tapping a card returns to `.thisRound` for details.
 struct FixturesView: View {
     @Environment(AppState.self) private var appState
 
     @State private var vm = FixturesViewModel()
 
-    /// 品牌粉色 —— 用于赛季总览进度条与「当前轮」角标
-    /// （与 TodayView 详情页不使用品牌色保持一致，本色仅用于进度语义）
+    /// Brand pink — season-overview progress bar and the "current round" accent
+    /// (kept out of TodayView on purpose; the color carries progress semantics only).
     private let accentPink = Color(red: 1.00, green: 0.231, blue: 0.498)
 
     var body: some View {
@@ -532,19 +551,22 @@ struct FixturesView: View {
         }
         .navigationTitle("")
         .task(id: appState.refreshNonce) {
-            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
-            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            // Background polling refreshes silently: no full-screen overlay (a flash
+            // every 60 s on matchdays is very disruptive); first load / manual refresh
+            // keep it. isLoading still resets unconditionally so the overlay can never
+            // stick under odd timings.
             if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false
-            // 赛程页也展示进行中比赛，一并回报调度状态（与 TodayView 用同一入口）。
+            // The fixtures page also shows live matches; report the schedule via the
+            // same entry point as TodayView.
             appState.reportLiveSchedule(from: vm.matches)
         }
         .overlay { if appState.isLoading { LoadingView() } }
     }
 
-    // MARK: 本轮详情页
+    // MARK: This-round detail
 
     @ViewBuilder
     private func thisRoundSection(lang: AppLanguage, tz: TimeZone) -> some View {
@@ -565,21 +587,21 @@ struct FixturesView: View {
         }
     }
 
-    // MARK: 赛季总览页
+    // MARK: Season overview
 
     @ViewBuilder
     private func seasonOverviewSection(lang: AppLanguage, tz: TimeZone) -> some View {
         let progress = vm.seasonProgress
 
-        // 大标题「2026 赛季」
+        // Large title "2026 Season"
         Text(String(format: UIString.seasonHeader.text(lang),
                      progress?.seasonYear ?? Calendar.current.component(.year, from: Date())))
             .font(.system(size: 28, weight: .bold))
 
-        // 轮次切换 pill（保留入口，与新赛季总览并存）
+        // Round switch pills (kept alongside the season overview)
         modeBar(lang: lang)
 
-        // 卡片网格
+        // Card grid
         let snapshots = vm.roundSnapshots(seasonProgress: progress)
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 200, maximum: 260),
@@ -604,7 +626,7 @@ struct FixturesView: View {
         }
     }
 
-    // MARK: 模式切换 pill
+    // MARK: Mode switch pills
 
     @ViewBuilder
     private func modeBar(lang: AppLanguage) -> some View {
@@ -638,27 +660,30 @@ struct FixturesView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: 轮次 chip bar
+    // MARK: Round chip bar
 
-    /// 「本轮」模式下的横向轮次切换：**固定窗口** —— 一次只渲染 `visibleRounds`
-    /// （至多 5 个轮次），每个 chip 显示「MD N · M月d日」，聚焦 chip 高亮。
-    /// 左右两个箭头按窗口大小（±5）翻页，**只移动窗口、不修改 `focusedRound`** ——
-    /// 选中的轮次保持高亮、内容区不变；只有点 chip 才切换选中轮。
+    /// "This round" mode's horizontal round switch: a **fixed window** — renders only
+    /// `visibleRounds` (at most 5), each chip "MD N · Aug 29", focused chip highlighted.
+    /// The arrows page by the window size (±5) and **move only the window, never
+    /// `focusedRound`** — the selected round stays highlighted; only tapping a chip
+    /// changes it.
     ///
-    /// 窗口状态在 ViewModel（`roundWindowStart`）里，这里是纯渲染 + 转发动作。
+    /// Window state lives in the ViewModel (`roundWindowStart`); this is pure
+    /// rendering + action forwarding.
     @ViewBuilder
     private func roundChipBar(lang: AppLanguage, tz: TimeZone) -> some View {
         let rounds = vm.visibleRounds
         ScrollView(.horizontal, showsIndicators: false) {
-            // ⚠️ 保留 LazyHStack 而非普通 HStack：
-            // 窗口固定 5 个 chip，眼下 lazy 已不是性能必需项，但它是护栏 ——
-            // `testRoundChipBarUsesLazyHStack` 会断言它存在，且万一以后窗口调大
-            // 也不会退化成「一次建上百个视图」。
+            // ⚠️ Keep a LazyHStack rather than a plain HStack: the window is fixed at
+            // 5 chips so lazy isn't a performance requirement today, but it is a guard
+            // rail — `testRoundChipBarUsesLazyHStack` asserts it exists, and if the
+            // window ever grows it won't regress to building hundreds of views at once.
             //
-            // 安全性：外层是 ScrollView（不是 lazy 容器），不构成「lazy 套 lazy」；
-            // 且下方有 .frame(height: 32) 提供确定高度，横向 lazy 容器能正常算尺寸。
+            // Safety: the outer container is a ScrollView (not a lazy container), so
+            // this is not "lazy inside lazy"; the .frame(height: 32) below gives the
+            // horizontal lazy container a definite height.
             LazyHStack(spacing: 8) {
-                // 上一组轮次（窗口已经在最左时隐藏）
+                // Previous page (hidden when the window is already leftmost)
                 if vm.roundWindowStart > 0 {
                     roundPageButton(systemName: "chevron.left",
                                     help: UIString.prevRoundsPage.text(lang)) {
@@ -675,7 +700,7 @@ struct FixturesView: View {
                     }
                 }
 
-                // 下一组轮次（窗口已经在最右，或轮次总数不足一屏时隐藏）
+                // Next page (hidden when rightmost, or when everything already fits)
                 if vm.roundWindowStart < vm.roundWindowMaxStart {
                     roundPageButton(systemName: "chevron.right",
                                     help: UIString.nextRoundsPage.text(lang)) {
@@ -685,15 +710,16 @@ struct FixturesView: View {
             }
             .padding(.horizontal, 2)
         }
-        // ⚠️ 必须有明确高度：嵌套在纵向 ScrollView 里的横向 ScrollView，
-        // 没有高度约束会和父视图无限协商尺寸，布局阶段直接卡死主线程。
-        // （同时它也给上面的 LazyHStack 提供了确定高度 —— 删掉会同时回归卡死 bug
-        //  并让 lazy 容器算不出尺寸。）
+        // ⚠️ A definite height is mandatory: a horizontal ScrollView nested in a
+        // vertical one, without a height constraint, negotiates sizes with its parent
+        // forever and deadlocks the main thread during layout. (It also gives the
+        // LazyHStack above its definite height — removing it regresses both the hang
+        // and lazy sizing.)
         .frame(height: 32)
     }
 
-    /// 轮次 chip bar 两端的圆形翻页按钮（`<` / `>`）。
-    /// 两个按钮共用同一个实现，保证样式与无障碍文案口径一致。
+    /// Round paging buttons (`<` / `>`), one shared implementation for identical
+    /// styling and accessibility copy.
     @ViewBuilder
     private func roundPageButton(systemName: String,
                                  help: String,
@@ -710,7 +736,7 @@ struct FixturesView: View {
         .help(help)
     }
 
-    /// 单个轮次 chip 的文案：「MD N · M月d日」
+    /// Chip label: "MD N · Aug 29".
     private func chipLabel(round: Int, lang: AppLanguage, tz: TimeZone) -> String {
         let date = vm.roundStart(round)
         let dateStr = date.map { formatShortDate($0, tz: tz, lang: lang) } ?? "—"
@@ -734,16 +760,16 @@ struct FixturesView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: 本轮比赛分组（按日期）
+    // MARK: Round matches grouped by date
 
     @ViewBuilder
     private func groupsSection(lang: AppLanguage, tz: TimeZone) -> some View {
         let sections = vm.groupedSections(tz: tz)
-        // ⚠️ 这里必须是普通 VStack，不能是 LazyVStack：
-        // lazy 容器向子视图提议的是「未确定宽度」，而 LazyVGrid 必须拿到确定宽度
-        // 才能算出列数 → 行数 → 自身高度。两者叠加会让尺寸协商反复来回，
-        // 主线程 100% 打满，表现为「数据加载完了但界面卡在转圈」。
-        // 一轮最多 10 场、分组最多 4-5 个，全量渲染毫无压力。
+        // ⚠️ This must be a plain VStack, not LazyVStack: a lazy container proposes an
+        // undefined width to children, and a LazyVGrid needs a definite width to solve
+        // columns → rows → height. Stacking them makes size negotiation ping-pong and
+        // pins the main thread at 100% — "data loaded but the UI spins forever".
+        // A round has at most 10 matches in 4-5 groups; rendering everything is free.
         VStack(alignment: .leading, spacing: 22) {
             ForEach(sections) { section in
                 VStack(alignment: .leading, spacing: 10) {
@@ -751,8 +777,8 @@ struct FixturesView: View {
                         .font(.headline)
                         .padding(.leading, 2)
 
-                    // ⚠️ maximum 必须是具体数值，不能是 .infinity：
-                    // 无界上限同样会让 .adaptive 的列数计算发散。
+                    // ⚠️ maximum must be a concrete value, never .infinity: an unbounded
+                    // max makes .adaptive's column math diverge too.
                     LazyVGrid(
                         columns: [GridItem(.adaptive(minimum: 240, maximum: 320),
                                            spacing: 12, alignment: .top)],
@@ -769,13 +795,13 @@ struct FixturesView: View {
     }
 }
 
-// MARK: - 赛季总览卡片
+// MARK: - Season overview card
 
-/// 单个轮次在赛季总览里的预览卡：
-/// - 左上「第 N 轮」
-/// - 右上 状态点（past=绿 / current=品牌粉 / future=灰 / unknown=灰）
-/// - 第二行 起始日期「M月d日」
-/// - 第三行起 至多 3 场预览（[crest] vs [crest] — score）
+/// One round's preview card in the season overview:
+/// - top-left "Round N"
+/// - top-right status dot (past=green / current=brand pink / future=gray / unknown=gray)
+/// - second row start date
+/// - then up to 3 match previews ([crest] vs [crest] — score)
 struct SeasonOverviewCard: View {
     @Environment(AppState.self) private var appState
     let snapshot: RoundSnapshot
@@ -786,14 +812,14 @@ struct SeasonOverviewCard: View {
     var body: some View {
         let isCurrent = snapshot.progress == .current
         VStack(alignment: .leading, spacing: 6) {
-            // 顶行：第 N 轮 + 状态点
+            // Top row: round + status dot
             HStack {
                 Text(String(format: UIString.roundN.text(lang), snapshot.round))
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 statusDot
             }
-            // 第二行：起始日期
+            // Second row: start date
             if let s = snapshot.startDate {
                 Text(formatShortDate(s, tz: tz, lang: lang))
                     .font(.caption)
@@ -804,7 +830,7 @@ struct SeasonOverviewCard: View {
                     .foregroundStyle(.tertiary)
             }
 
-            // 预览比赛区（至多 3 场）
+            // Preview area (up to 3 matches)
             VStack(spacing: 4) {
                 if snapshot.previews.isEmpty {
                     Text(UIString.noData.text(lang))
@@ -868,9 +894,9 @@ struct SeasonOverviewCard: View {
     }
 }
 
-// MARK: - 比赛卡（本轮详情页用）
+// MARK: - Match card (this-round detail)
 
-/// 单场比赛卡（截图风格：大字时间 + 主标 + 两行队名/比分）
+/// Single match card (screenshot style: big time + home badge + two team rows).
 struct MatchGridCard: View {
     @Environment(AppState.self) private var appState
     let match: Match
@@ -968,14 +994,17 @@ struct MatchGridCard: View {
     }
 }
 
-// MARK: - 旧版比赛卡（今日页与未来可能共用：主队 | 比分 | 客队 三栏）
-//   保留不动：今日页与顶部比赛卡共用，旧版设计保留。
+// MARK: - Legacy match card (home | score | away; shared by Today)
+//   Kept as-is: used by the Today page and the featured card.
+
 struct MatchCard: View {
     @Environment(AppState.self) private var appState
     let match: Match
-    /// 球队靠两边（true）还是贴着中间比分（false，默认）。
-    /// - `true`  = 主队靠卡片左边缘、客队靠卡片右边缘 —— **今日页**用（用户偏好：两队分开靠边）。
-    /// - `false` = 主队靠右贴比分、客队靠左贴比分 —— **赛程页**用（让比分列竖直对齐，多条卡横向扫读更整齐）。
+    /// Teams flanking the edges (true) or hugging the center score (false, default).
+    /// - `true`  = home at the left edge, away at the right edge — **Today page**
+    ///   (user preference: the two teams split apart).
+    /// - `false` = both hug the center score — **fixtures page** (keeps the score
+    ///   column vertically aligned for scanning multiple cards).
     var teamsFlankSides: Bool = false
 
     var body: some View {
@@ -1039,24 +1068,24 @@ struct MatchCard: View {
     }
 }
 
-/// 把开球时间按所选时区显示为「HH:mm」
+/// Kickoff as "HH:mm" in the selected time zone.
 private func formatKickoffShort(_ utcDate: String?, tz: TimeZone) -> String {
     guard let d = parseKickoffDate(utcDate) else { return "" }
     let df = FormatterPool.shared.formatter(tz: tz, localeID: "en_US", format: "HH:mm")
     return df.string(from: d)
 }
 
-// MARK: - 解析与格式化（共享）
+// MARK: - Parsing & formatting (shared)
 
-/// 解析 ISO8601 开球时间
+/// Parse an ISO8601 kickoff time.
 func parseKickoffDate(_ utcDate: String?) -> Date? {
     guard let utcDate else { return nil }
-    // 走缓存池里的静态解析器：这里在 body 求值路径上每场比赛都会被调用
+    // Pooled static parsers: called per match on the body evaluation path.
     let pool = FormatterPool.shared
     return pool.isoBasic.date(from: utcDate) ?? pool.isoFractional.date(from: utcDate)
 }
 
-/// 把 ISO8601 开球时间按所选时区换算为「日期 时间」文本
+/// ISO8601 kickoff as "date time" text in the selected time zone.
 func formatKickoff(_ utcDate: String?, tz: DisplayTimeZone, lang: AppLanguage) -> String {
     guard let d = parseKickoffDate(utcDate) else { return UIString.tbd.text(lang) }
     let df = FormatterPool.shared.formatter(

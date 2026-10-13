@@ -1,38 +1,39 @@
 import XCTest
 @testable import EPLViewer
 
-// 自动刷新:持久化 / 调度器 / 缓存失效
-// 从 EPLViewerTests.swift 按域拆出;方法仍挂在同一个 EPLViewerTests 类上。
+// Auto-refresh: persistence / scheduler / cache invalidation.
+// Split from EPLViewerTests.swift by domain; methods still live on the same class.
 
 extension EPLViewerTests {
-    // MARK: - autoRefresh 持久化（UserDefaults）
+    // MARK: - autoRefresh persistence (UserDefaults)
 
-    /// `autoRefresh` 应持久化到 UserDefaults（key `epl_autorefresh`）：写入后重读一致。
+    /// `autoRefresh` should persist to UserDefaults (key `epl_autorefresh`): writes
+    /// read back consistently.
     @MainActor
     func testAutoRefreshPersistsToUserDefaults() throws {
         let key = "epl_autorefresh"
         let defaults = UserDefaults.standard
         let original = defaults.object(forKey: key)
         defer {
-            // 还原，避免污染本机 App 默认值 / 其它测试
+            // Restore, so this machine's app defaults / other tests aren't polluted
             if let original { defaults.set(original, forKey: key) }
             else { defaults.removeObject(forKey: key) }
         }
 
         defaults.removeObject(forKey: key)
         let state = AppState()
-        XCTAssertFalse(state.autoRefresh, "未写入时默认应为 false")
+        XCTAssertFalse(state.autoRefresh, "defaults to false when nothing was written")
 
         state.autoRefresh = true
-        XCTAssertTrue(defaults.bool(forKey: key), "打开后应写回 UserDefaults")
-        XCTAssertTrue(AppState().autoRefresh, "新实例应从 UserDefaults 恢复 true")
+        XCTAssertTrue(defaults.bool(forKey: key), "turning it on writes back to UserDefaults")
+        XCTAssertTrue(AppState().autoRefresh, "a new instance restores true from UserDefaults")
 
         state.autoRefresh = false
-        XCTAssertFalse(defaults.bool(forKey: key), "关闭后应写回 false")
-        XCTAssertFalse(AppState().autoRefresh, "新实例应恢复 false")
+        XCTAssertFalse(defaults.bool(forKey: key), "turning it off writes back false")
+        XCTAssertFalse(AppState().autoRefresh, "a new instance restores false")
     }
 
-    /// 未写入 key 时默认关闭（`UserDefaults.bool` 缺省即 false）。
+    /// Defaults to off when the key was never written (`UserDefaults.bool` defaults to false).
     @MainActor
     func testAutoRefreshDefaultsToFalseWhenKeyAbsent() throws {
         let key = "epl_autorefresh"
@@ -43,116 +44,122 @@ extension EPLViewerTests {
             else { defaults.removeObject(forKey: key) }
         }
         defaults.removeObject(forKey: key)
-        XCTAssertFalse(AppState().autoRefresh, "未写入 key 时默认 false")
+        XCTAssertFalse(AppState().autoRefresh, "false by default when the key is absent")
     }
 
-    /// 从 UserDefaults 恢复 `autoRefresh == true` 时，Toggle 的 `.onChange` 不会触发，
-    /// 必须在根视图出现时补配置一次定时器，否则「UI 显示开启但 timer 没建」。
+    /// When `autoRefresh == true` is restored from UserDefaults, the Toggle's
+    /// `.onChange` never fires — the root view must configure the timer once on
+    /// appear, otherwise "the UI says on but no timer exists".
     func testRootViewConfiguresAutoRefreshOnAppear() throws {
         let code = codeOnly(try sourceFile("ContentView.swift"))
         XCTAssertTrue(code.contains(".task { appState.configureAutoRefresh() }"),
-                      "ContentView 应在出现时调用 configureAutoRefresh()，以恢复持久化的开启状态")
+                      "ContentView should call configureAutoRefresh() on appear to restore the persisted on state")
     }
 
-    /// `autoRefresh` 声明应从 UserDefaults 读（Bool 直接读）、`didSet` 写回，key 与既有命名一致。
+    /// The `autoRefresh` declaration should read UserDefaults (Bool directly), write
+    /// back in didSet, with the key matching the existing naming scheme.
     func testAutoRefreshDeclarationUsesUserDefaults() throws {
         let code = codeOnly(try sourceFile("AppState.swift"))
         let decl = try XCTUnwrap(
             qaSlice(code, from: "var autoRefresh: Bool", to: "var isLoading"),
-            "找不到 autoRefresh 声明"
+            "autoRefresh declaration not found"
         )
         XCTAssertTrue(decl.contains("UserDefaults.standard.bool(forKey: \"epl_autorefresh\")"),
-                      "autoRefresh 应从 UserDefaults 读取（Bool 直接读，不套 rawValue）")
+                      "autoRefresh should read from UserDefaults (Bool directly, no rawValue)")
         XCTAssertTrue(decl.contains("UserDefaults.standard.set(autoRefresh, forKey: \"epl_autorefresh\")"),
-                      "didSet 应把 autoRefresh 写回 UserDefaults")
-        XCTAssertFalse(decl.contains(".rawValue"), "Bool 读写不需要 rawValue")
+                      "didSet should write autoRefresh back to UserDefaults")
+        XCTAssertFalse(decl.contains(".rawValue"), "Bool reads/writes need no rawValue")
     }
 
-    // MARK: - 「比赛期间自动刷新」调度器（AutoRefreshScheduler 纯函数）
+    // MARK: - "Auto-refresh during matches" scheduler (AutoRefreshScheduler, pure functions)
 
-    /// 调度常量锁定（改动需同步契约表）。
+    /// Scheduler constants locked (contract table must be updated in sync).
     func testAutoRefreshSchedulerConstants() throws {
-        XCTAssertEqual(AutoRefreshScheduler.liveInterval, 60, "有比赛时 60s")
-        XCTAssertEqual(AutoRefreshScheduler.kickoffLeadTime, 15 * 60, "开球前 15 分钟提前醒")
-        XCTAssertEqual(AutoRefreshScheduler.maxIdleSleep, 6 * 60 * 60, "空闲最长休眠 6h")
-        XCTAssertEqual(AutoRefreshScheduler.matchWindow, 3 * 60 * 60, "单场最大跨度 3h")
+        XCTAssertEqual(AutoRefreshScheduler.liveInterval, 60, "60s while a match is live")
+        XCTAssertEqual(AutoRefreshScheduler.kickoffLeadTime, 15 * 60, "wake 15 minutes before kickoff")
+        XCTAssertEqual(AutoRefreshScheduler.maxIdleSleep, 6 * 60 * 60, "max idle sleep 6h")
+        XCTAssertEqual(AutoRefreshScheduler.matchWindow, 3 * 60 * 60, "max match span 3h")
     }
 
-    /// `refreshInterval` 决策表 —— 逐行覆盖（行为契约，唯一间隔入口）。
+    /// The `refreshInterval` decision table — row by row (the behavioral contract,
+    /// the single interval entry point).
     func testRefreshIntervalDecisionTable() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T12:00:00Z"))
 
-        // 行 1：全局 autoRefresh=true → 始终 60（与 duringMatches / schedule 无关）
+        // Row 1: global autoRefresh=true → always 60 (regardless of duringMatches / schedule)
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: true, duringMatches: false,
             schedule: RefreshSchedule(hasLiveMatch: false, nextKickoff: nil), now: now),
-            AutoRefreshScheduler.liveInterval, "全局开 → 60s")
+            AutoRefreshScheduler.liveInterval, "global on → 60s")
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: true, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: true, nextKickoff: nil), now: now),
-            AutoRefreshScheduler.liveInterval, "全局开 → 60s（与其它无关）")
+            AutoRefreshScheduler.liveInterval, "global on → 60s (regardless of anything else)")
 
-        // 行 2：全局关 + 比赛期间关 → nil（不设定时器）
+        // Row 2: global off + during-matches off → nil (no timer)
         XCTAssertNil(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: false,
             schedule: RefreshSchedule(hasLiveMatch: true, nextKickoff: now.addingTimeInterval(600)), now: now),
-            "两项都关 → 不设定时器")
+            "both off → no timer")
 
-        // 行 3：全局关 + 比赛期间开 + 有比赛进行中 → 60
+        // Row 3: global off + during-matches on + a live match → 60
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: true, nextKickoff: nil), now: now),
-            AutoRefreshScheduler.liveInterval, "有比赛进行中 → 60s")
+            AutoRefreshScheduler.liveInterval, "live match → 60s")
 
-        // 行 4：无比赛，下一场 +2h → 睡到开球前 15 分钟 = 2h - 15min = 6300s
-        //   ⚠️ 团队需求表里此处写作 6900；但 6900 = 2h − 5min，与 kickoffLeadTime(=15min) 不自洽。
-        //   按常量语义（开球前 15 分钟醒）应为 6300，本测试锁 6300。
+        // Row 4: no live match, next kickoff +2h → sleep until 15 min before = 2h - 15min = 6300s
+        //   ⚠️ The team requirements table says 6900 here; but 6900 = 2h − 5min, inconsistent
+        //   with kickoffLeadTime (=15min). Per the constant semantics (wake 15 min before
+        //   kickoff) it should be 6300; this test pins 6300.
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: false, nextKickoff: now.addingTimeInterval(2 * 3600)), now: now),
-            2 * 3600 - 15 * 60, "睡到下一场开球前 15 分钟（6300s）")
+            2 * 3600 - 15 * 60, "sleep until 15 minutes before the next kickoff (6300s)")
 
-        // 行 5：下一场 +10min（已进入开球前 15 分钟窗口）→ 60
+        // Row 5: next kickoff +10min (already inside the pre-kickoff window) → 60
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: false, nextKickoff: now.addingTimeInterval(10 * 60)), now: now),
-            AutoRefreshScheduler.liveInterval, "已进入开球前窗口 → 60s")
+            AutoRefreshScheduler.liveInterval, "inside the pre-kickoff window → 60s")
 
-        // 行 6：下一场 +3 天 → clamp 到 maxIdleSleep
+        // Row 6: next kickoff +3 days → clamp to maxIdleSleep
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: false, nextKickoff: now.addingTimeInterval(3 * 24 * 3600)), now: now),
-            AutoRefreshScheduler.maxIdleSleep, "太久远 → clamp 到 6h")
+            AutoRefreshScheduler.maxIdleSleep, "too far away → clamp to 6h")
 
-        // 行 7：无下一场 → maxIdleSleep
+        // Row 7: no next match → maxIdleSleep
         XCTAssertEqual(AutoRefreshScheduler.refreshInterval(
             autoRefresh: false, duringMatches: true,
             schedule: RefreshSchedule(hasLiveMatch: false, nextKickoff: nil), now: now),
-            AutoRefreshScheduler.maxIdleSleep, "无赛程 → 6h 兜底")
+            AutoRefreshScheduler.maxIdleSleep, "no schedule → 6h fallback")
     }
 
-    /// 开球 30 分钟前、未结束 → 时间窗判定为进行中；无未来比赛 → nextKickoff = nil。
+    /// 30 minutes after kickoff, not finished → the time window says live; no future
+    /// matches → nextKickoff = nil.
     func testScheduleDetectsLiveMatchByKickoffWindow() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let live = makeMatchTeams(id: 1, home: 1, away: 2,
                                   kickoff: "2026-09-12T13:30:00Z", status: "IN_PLAY")
         let s = AutoRefreshScheduler.schedule(matches: [live], now: now)
-        XCTAssertTrue(s.hasLiveMatch, "开球 30 分钟前、未结束 → 进行中")
-        XCTAssertNil(s.nextKickoff, "没有晚于 now 的比赛")
+        XCTAssertTrue(s.hasLiveMatch, "30 minutes after kickoff, not finished → live")
+        XCTAssertNil(s.nextKickoff, "no matches later than now")
     }
 
-    /// 数据源状态还没翻（status 仍是 SCHEDULED），但 kickoff 已过且未超窗 → 仍算进行中
-    /// （本项目有前科：FPL 开球后约 8 分钟状态/比分未更新）。
+    /// The source status hasn't flipped (still SCHEDULED) but kickoff passed within
+    /// the window → still live (FPL once lagged ~8 minutes on status/scores).
     func testScheduleKickoffWindowIgnoresStaleStatus() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let m = makeMatchTeams(id: 1, home: 1, away: 2,
                                kickoff: "2026-09-12T13:55:00Z", status: "SCHEDULED")
         XCTAssertTrue(AutoRefreshScheduler.schedule(matches: [m], now: now).hasLiveMatch,
-                      "刚开球、状态未翻 → 用时间窗判定为进行中")
+                      "just kicked off, status stale → the time window decides live")
     }
 
-    /// 回归：延期 / 取消的比赛即使原开球时间落进时间窗，也不得触发 60s 直播轮询
-    /// （否则一场延期的比赛会让调度器空转轮询整整 3 小时）。
+    /// Regression: postponed/canceled matches must not trigger 60 s live polling even
+    /// though their original kickoff falls inside the window (otherwise one postponed
+    /// match would have the scheduler spin for 3 hours).
     func testScheduleIgnoresPostponedAndCanceledMatches() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let postponed = makeMatchTeams(id: 1, home: 1, away: 2,
@@ -160,83 +167,88 @@ extension EPLViewerTests {
         let canceled = makeMatchTeams(id: 2, home: 3, away: 4,
                                       kickoff: "2026-09-12T13:55:00Z", status: "CANCELED")
         let s = AutoRefreshScheduler.schedule(matches: [postponed, canceled], now: now)
-        XCTAssertFalse(s.hasLiveMatch, "延期 / 取消不算比赛进行中")
+        XCTAssertFalse(s.hasLiveMatch, "postponed/canceled are not live")
     }
 
-    /// 已结束且已超出 3h 时间窗 → 非进行中。
+    /// Finished and outside the 3h window → not live.
     func testScheduleFinishedOutsideWindowIsNotLive() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let m = makeMatchTeams(id: 1, home: 1, away: 2,
                                kickoff: "2026-09-12T10:00:00Z", status: "FINISHED")
         XCTAssertFalse(AutoRefreshScheduler.schedule(matches: [m], now: now).hasLiveMatch,
-                       "已结束且超窗口 → 非进行中")
+                       "finished and outside the window → not live")
     }
 
-    /// ⚠️ 补真实覆盖缺口：已 FINISHED 且**开球仍在 3h 时间窗内** → 必须判为「非进行中」。
-    /// 既有的 `testScheduleFinishedOutsideWindowIsNotLive` 用的是 4h 前开球（本就超出窗口），
-    /// 因此 `!TodayFilter.isFinished(m)` 这个条件**曾经实际没有被任何用例覆盖**（删掉它也全绿：
-    /// 独立 QA 的变异测试 N1 已证实）。本用例专门堵这个洞。
+    /// ⚠️ Fills a real coverage gap: FINISHED but **still inside the 3h window** must
+    /// read "not live". The existing `testScheduleFinishedOutsideWindowIsNotLive` uses
+    /// a kickoff 4h back (already outside), so the `!TodayFilter.isFinished(m)`
+    /// condition **was actually uncovered** (removing it kept everything green —
+    /// proven by mutation N1 in independent QA). This case plugs that hole.
     func testScheduleFinishedInsideWindowIsNotLive() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let m = makeMatchTeams(id: 1, home: 1, away: 2,
-                               kickoff: "2026-09-12T13:00:00Z", status: "FINISHED") // 1h 前开球，仍在 3h 窗内
+                               kickoff: "2026-09-12T13:00:00Z", status: "FINISHED") // 1h ago, still inside the 3h window
         XCTAssertFalse(AutoRefreshScheduler.schedule(matches: [m], now: now).hasLiveMatch,
-                       "已结束的比赛即使仍落在时间窗内，也必须判为非进行中")
+                       "a finished match must read not-live even while still inside the time window")
     }
 
-    /// 结构性守卫：定时器 repeats、视图回报去抖、两处上报点齐全。
-    /// （这三条此前均无用例把守 —— 独立 QA 变异 N4 / N6 / N7 删掉后测试仍全绿。）
+    /// Structural guards: timer repeats, the view-report debounce, and both report
+    /// sites. (None of these had coverage before — mutations N4 / N6 / N7 deleted
+    /// them and everything stayed green.)
     func testLiveScheduleWiringGuards() throws {
         let app = codeOnly(try sourceFile("AppState.swift"))
 
-        // N4：定时器必须 repeats —— 「睡到开球前」是先睡一个长间隔、再靠 tick 重算收尾，
-        //     改成一次性的话只会醒一次，之后再也无人重建它。
+        // N4: the timer must repeat — "sleep until pre-kickoff" sleeps one long
+        //     interval and relies on the tick recompute to finish the job; a
+        //     one-shot timer would wake once and never be rebuilt.
         let cfg = try XCTUnwrap(
             qaSlice(app, from: "func configureAutoRefresh()", to: "func refreshTick"),
-            "找不到 configureAutoRefresh"
+            "configureAutoRefresh not found"
         )
         XCTAssertTrue(cfg.contains("repeats: true"),
-                      "定时器必须 repeats:true；改成一次性会导致长睡之后无人再建定时器")
+                      "the timer must repeat:true; a one-shot means nobody rebuilds it after a long sleep")
 
-        // N6：去抖 + 记下最新赛程（后者是 refreshTick 能重算 schedule 的前提）
+        // N6: the debounce + remembering the latest fixtures (the latter is what lets
+        // refreshTick recompute the schedule)
         XCTAssertTrue(app.contains("guard s != liveSchedule else { return }"),
-                      "reportLiveSchedule 必须保留去抖，否则每次视图回报都会重建 timer")
+                      "reportLiveSchedule must keep its debounce, or every view report rebuilds the timer")
         XCTAssertTrue(app.contains("lastKnownMatches = matches"),
-                      "reportLiveSchedule 必须记下最新赛程，供 refreshTick 按最新 now 重算 schedule")
+                      "reportLiveSchedule must remember the latest fixtures so refreshTick can recompute against the latest now")
 
-        // N7：两个加载赛程的页面都必须上报（漏一个就可能在停在该页时睡过比赛）
+        // N7: both pages that load fixtures must report (missing one risks sleeping
+        // through matches while parked on that page)
         XCTAssertTrue(codeOnly(try sourceFile("TodayView.swift")).contains("reportLiveSchedule(from: vm.matches)"),
-                      "TodayView 必须回报赛程")
+                      "TodayView must report the schedule")
         XCTAssertTrue(codeOnly(try sourceFile("FixturesView.swift")).contains("reportLiveSchedule(from: vm.matches)"),
-                      "FixturesView 必须回报赛程")
+                      "FixturesView must report the schedule")
     }
 
-    /// 未来比赛不算进行中；`nextKickoff` 取最早的未来开球。
+    /// Future matches aren't live; `nextKickoff` takes the earliest future kickoff.
     func testScheduleFutureMatchNotLiveAndReportsNextKickoff() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let matches = [
             makeMatchTeams(id: 1, home: 1, away: 2, kickoff: "2026-09-12T16:00:00Z", status: "SCHEDULED"),
-            makeMatchTeams(id: 2, home: 3, away: 4, kickoff: "2026-09-12T15:00:00Z", status: "SCHEDULED"), // 最早
+            makeMatchTeams(id: 2, home: 3, away: 4, kickoff: "2026-09-12T15:00:00Z", status: "SCHEDULED"), // earliest
         ]
         let s = AutoRefreshScheduler.schedule(matches: matches, now: now)
-        XCTAssertFalse(s.hasLiveMatch, "未来的比赛不算进行中")
+        XCTAssertFalse(s.hasLiveMatch, "future matches aren't live")
         XCTAssertEqual(s.nextKickoff, try XCTUnwrap(parseKickoffDate("2026-09-12T15:00:00Z")),
-                       "nextKickoff 应是最早的未来开球")
+                       "nextKickoff should be the earliest future kickoff")
     }
 
-    /// 同时存在进行中与未来比赛 → 两者都要报出来。
+    /// Live and future matches coexist → both must be reported.
     func testScheduleReportsBothLiveAndNextKickoff() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let matches = [
-            makeMatchTeams(id: 1, home: 1, away: 2, kickoff: "2026-09-12T13:30:00Z", status: "IN_PLAY"),  // 进行中
-            makeMatchTeams(id: 2, home: 3, away: 4, kickoff: "2026-09-12T17:00:00Z", status: "SCHEDULED"), // 未来
+            makeMatchTeams(id: 1, home: 1, away: 2, kickoff: "2026-09-12T13:30:00Z", status: "IN_PLAY"),  // live
+            makeMatchTeams(id: 2, home: 3, away: 4, kickoff: "2026-09-12T17:00:00Z", status: "SCHEDULED"), // future
         ]
         let s = AutoRefreshScheduler.schedule(matches: matches, now: now)
         XCTAssertTrue(s.hasLiveMatch)
         XCTAssertEqual(s.nextKickoff, try XCTUnwrap(parseKickoffDate("2026-09-12T17:00:00Z")))
     }
 
-    /// 空数组 / `utcDate` 不可解析 → 不崩，返回 false/nil。
+    /// Empty array / unparseable `utcDate` → no crash; false/nil.
     func testScheduleEmptyAndUnparseable() throws {
         let now = try XCTUnwrap(parseKickoffDate("2026-09-12T14:00:00Z"))
         let empty = AutoRefreshScheduler.schedule(matches: [], now: now)
@@ -245,65 +257,71 @@ extension EPLViewerTests {
 
         let bad = makeMatchTeams(id: 9, home: 1, away: 2, kickoff: "not-a-date", status: "SCHEDULED")
         let s = AutoRefreshScheduler.schedule(matches: [bad], now: now)
-        XCTAssertFalse(s.hasLiveMatch, "不可解析的 utcDate 应被跳过")
+        XCTAssertFalse(s.hasLiveMatch, "an unparseable utcDate should be skipped")
         XCTAssertNil(s.nextKickoff)
     }
 
-    /// `configureAutoRefresh` 必须走 `refreshInterval` 决策，不得再硬编码 60s。
+    /// `configureAutoRefresh` must go through the `refreshInterval` decision, never a
+    /// hardcoded 60 s.
     func testConfigureAutoRefreshUsesSchedulerNotHardcoded60() throws {
         let code = codeOnly(try sourceFile("AppState.swift"))
         let fn = try XCTUnwrap(
             qaSlice(code, from: "func configureAutoRefresh()", to: "func reportLiveSchedule"),
-            "找不到 configureAutoRefresh"
+            "configureAutoRefresh not found"
         )
         XCTAssertTrue(fn.contains("AutoRefreshScheduler.refreshInterval("),
-                      "间隔决策必须走 refreshInterval，不得硬编码")
+                      "the interval decision must go through refreshInterval, not hardcoding")
         XCTAssertFalse(fn.contains("withTimeInterval: 60"),
-                       "不应再硬编码 60s 间隔")
+                       "no hardcoded 60 s interval")
         XCTAssertTrue(fn.contains("withTimeInterval: interval"),
-                      "应把 refreshInterval 的结果传给定时器")
+                      "refreshInterval's result should be passed to the timer")
     }
 
-    /// 🚨 守护栏：定时器唤醒后必须**重算间隔**，否则会睡过整场比赛。
-    /// 场景：睡到「开球前 15 分钟」醒来时，`schedule` 内容与睡眠前完全相同（`hasLiveMatch` 仍 false、
-    /// `nextKickoff` 仍是同一场）→ `reportLiveSchedule` 会早退不重建；只有 tick 自己重算才能把
-    /// 间隔切到 60s。删掉 `refreshTick` 里的 `configureAutoRefresh()` 本测试必须变红。
+    /// 🚨 Guard rail: the timer must **recompute the interval** on every wake, or it
+    /// sleeps through whole matches. Scenario: waking "15 min before kickoff" sees
+    /// the exact same schedule (hasLiveMatch still false, same nextKickoff) →
+    /// reportLiveSchedule debounces and doesn't rebuild; only the tick's own recompute
+    /// switches the interval to 60 s. Deleting `configureAutoRefresh()` from
+    /// `refreshTick` must turn this test red.
     func testRefreshTickRecomputesIntervalOnEveryWake() throws {
         let code = codeOnly(try sourceFile("AppState.swift"))
 
-        // 1) refreshTick 体内必须「先刷新、再重算间隔」
+        // 1) refreshTick's body must "refresh first, then recompute the interval"
         let tick = try XCTUnwrap(
             qaSlice(code, from: "func refreshTick", to: "func reportLiveSchedule"),
-            "找不到 refreshTick"
+            "refreshTick not found"
         )
         XCTAssertTrue(tick.contains("await refresh(scoresOnly: true)"),
-                      "refreshTick 必须先刷新数据，且比赛期间轮询只失效赛程（scoresOnly），不清整份 bootstrap")
+                      "refreshTick must refresh data first, with live polling invalidating fixtures only (scoresOnly), never the whole bootstrap")
         XCTAssertTrue(tick.contains("configureAutoRefresh()"),
-                      "refreshTick 必须重算间隔（configureAutoRefresh），否则会睡过整场比赛")
-        // ⚠️ 关键：必须用**最新 now 重新算 schedule**，不能只拿存下来的 liveSchedule 算间隔。
-        // `hasLiveMatch` 只是存储 Bool、不会自己翻转；只有在 tick 里按开球时间窗重算，
-        // 时间越过比赛结束后才会变成 false。否则停在不上报赛程的 tab（积分榜/设置/球员榜/伤停）
-        // 时 liveSchedule 被冻结 → 比赛全结束仍永久 60s 轮询。
+                      "refreshTick must recompute the interval (configureAutoRefresh), or it sleeps through matches")
+        // ⚠️ Key: the schedule must be **recomputed against the latest now** — using
+        // the stored liveSchedule alone can't work. hasLiveMatch is a stored Bool that
+        // never flips by itself; only recomputing the kickoff window in the tick turns
+        // it false after the match ends. Otherwise, parked on a tab that doesn't report
+        // (standings/settings/leaders/injuries), liveSchedule freezes → permanent 60 s
+        // polling after all matches end.
         XCTAssertTrue(tick.contains("AutoRefreshScheduler.schedule("),
-                      "refreshTick 必须用最新 now 重算 schedule，否则停在不上报的 tab 时会永久 60s 轮询")
+                      "refreshTick must recompute the schedule against the latest now, or parked tabs poll at 60 s forever")
 
-        // 2) 定时器 fire 闭包必须指向 refreshTick()，而不是只调 refresh()
+        // 2) The timer's fire closure must call refreshTick(), not just refresh()
         let cfg = try XCTUnwrap(
             qaSlice(code, from: "func configureAutoRefresh()", to: "func refreshTick"),
-            "找不到 configureAutoRefresh"
+            "configureAutoRefresh not found"
         )
         XCTAssertTrue(cfg.contains("await self?.refreshTick()"),
-                      "定时器 fire 闭包应调用 refreshTick()，在每次唤醒后重算间隔")
+                      "the fire closure should call refreshTick(), recomputing the interval on every wake")
         XCTAssertFalse(cfg.contains("await self?.refresh()"),
-                       "fire 闭包不应再直接调 refresh()（应调 refreshTick()）")
+                       "the fire closure must not call refresh() directly (it should call refreshTick())")
 
-        // 3) 不得残留「绝不在 tick 里重新 configure」的反向说明（防后人照抄改回去）
+        // 3) No leftover "never re-configure inside the tick" counter-instruction
+        //    (so nobody copies it back as a contract)
         let raw = try sourceFile("AppState.swift")
         XCTAssertFalse(raw.contains("绝不在 tick 里重新 configure"),
-                       "错误理由的注释必须删除，避免后人当契约改回去")
+                       "the wrong-reason comment must stay deleted so nobody reinstates it as a contract")
     }
 
-    // MARK: - 「比赛期间自动刷新」持久化 + 文案
+    // MARK: - "Auto-refresh during matches" persistence + copy
 
     @MainActor
     func testAutoRefreshDuringMatchesPersistsToUserDefaults() throws {
@@ -317,22 +335,25 @@ extension EPLViewerTests {
 
         defaults.removeObject(forKey: key)
         let state = AppState()
-        XCTAssertTrue(state.autoRefreshDuringMatches, "未写入（新装 / 从未动过这项）→ 默认开启")
+        XCTAssertTrue(state.autoRefreshDuringMatches, "unwritten (fresh install / never touched) → on by default")
 
         state.autoRefreshDuringMatches = true
-        XCTAssertTrue(defaults.bool(forKey: key), "打开后应写回 UserDefaults")
-        XCTAssertTrue(AppState().autoRefreshDuringMatches, "新实例应从 UserDefaults 恢复 true")
+        XCTAssertTrue(defaults.bool(forKey: key), "turning it on writes back to UserDefaults")
+        XCTAssertTrue(AppState().autoRefreshDuringMatches, "a new instance restores true from UserDefaults")
 
         state.autoRefreshDuringMatches = false
-        XCTAssertFalse(defaults.bool(forKey: key), "关闭后应写回 false")
-        // ⚠️ 关键回归：用户显式关掉后，新实例必须仍是 false，不能被「默认开」顶回 true。
-        // 这条守的是三态判定（object(forKey:) == nil）—— 若退化成 bool(forKey:)，
-        // 默认值 true 就没法实现，或者关掉后一重启又变开。
+        XCTAssertFalse(defaults.bool(forKey: key), "turning it off writes back false")
+        // ⚠️ Key regression: after the user explicitly turns it off, a new instance
+        // must still read false — never flipped back by the default-on. This guards
+        // the tri-state read (object(forKey:) == nil); degrading to bool(forKey:)
+        // would make the default-on unimplementable or flip off back to on across
+        // launches.
         XCTAssertFalse(AppState().autoRefreshDuringMatches,
-                       "用户显式关掉后，新实例必须仍是 false（不能被默认值顶回 true）")
+                       "after an explicit off, a new instance must stay false (the default must not flip it back)")
     }
 
-    /// 缺 key（新装 / 从未动过这项设置）→ **默认 true**（用户要求「装好就勾上」）。
+    /// Missing key (fresh install / never touched) → **true by default** (the user
+    /// asked for "checked out of the box").
     @MainActor
     func testAutoRefreshDuringMatchesDefaultsTrueWhenKeyAbsent() throws {
         let key = "epl_autorefresh_matches"
@@ -343,10 +364,10 @@ extension EPLViewerTests {
             else { defaults.removeObject(forKey: key) }
         }
         defaults.removeObject(forKey: key)
-        XCTAssertTrue(AppState().autoRefreshDuringMatches, "缺 key → 默认开启")
+        XCTAssertTrue(AppState().autoRefreshDuringMatches, "missing key → on by default")
     }
 
-    /// 文案必须中英双语，禁止写死中文。
+    /// The copy must exist in both languages; hardcoded Chinese is banned.
     func testAutoRefreshDuringMatchesStringsBilingual() throws {
         XCTAssertEqual(UIString.autoRefreshDuringMatches.text(.chinese), "比赛期间自动刷新")
         XCTAssertEqual(UIString.autoRefreshDuringMatches.text(.english), "Auto-refresh during matches")
@@ -355,54 +376,63 @@ extension EPLViewerTests {
                        "Global auto-refresh is on; this setting is not needed")
     }
 
-    /// 全局自动刷新开启时，「比赛期间自动刷新」Toggle 应被 disable，并显示脚注说明。
+    /// With the global auto-refresh on, the "during matches" toggle must be disabled
+    /// with the explanatory footnote.
     func testSettingsDisablesDuringMatchesToggleWhenGlobalOn() throws {
         let code = codeOnly(try sourceFile("SettingsView.swift"))
         XCTAssertTrue(code.contains(".disabled(appState.autoRefresh)"),
-                      "全局自动刷新开启时，「比赛期间自动刷新」应被 disable")
+                      "with global auto-refresh on, the during-matches toggle should be disabled")
         XCTAssertTrue(code.contains("UIString.autoRefreshDuringMatchesHint.text(appState.language)"),
-                      "应显示「无需设置」的脚注")
+                      "the 'not needed' footnote should show")
     }
 
-    /// 每列最多 4 场：确认只作用于两列，且「查看全部 →」入口完好。
+    /// Max 4 matches per column: confirm it applies only to the two columns and the
+    /// "View all →" entry is intact.
     func testColumnCardCapsAtFourAndViewAllIntact() throws {
         let code = codeOnly(try sourceFile("TodayView.swift"))
 
-        // columnCard 只有两处调用（左右两列），没有别的调用点被顺带截断
+        // columnCard has exactly two call sites (left/right columns); no other call
+        // site got truncated along with them
         XCTAssertEqual(count(of: "columnCard(", in: code), 3,
-                       "期望 columnCard 定义 1 处 + 调用 2 处；出现新的调用点需确认是否该被截断")
+                       "expected 1 definition + 2 calls of columnCard; a new call site needs a truncation review")
         XCTAssertEqual(count(of: "ForEach(Array(matches.prefix(4)))", in: code), 1,
-                       "截断只应发生在 columnCard 内部一处")
+                       "the truncation should live in exactly one place inside columnCard")
 
-        // 「查看全部 →」仍在，且仍跳赛程页 —— 被截断的比赛要有去处
+        // "View all →" still present and still jumps to the fixtures page — truncated
+        // matches need somewhere to go
         XCTAssertEqual(count(of: "UIString.viewAll", in: code), 1,
-                       "列卡片右上角的「查看全部 →」不能丢")
+                       "the column card's 'View all →' must not be lost")
         XCTAssertTrue(code.contains("appState.selected = .fixtures"),
-                      "「查看全部 →」必须仍跳转到赛程页")
+                      "'View all →' must still jump to the fixtures page")
 
-        // 截断不应影响 ViewModel 数据本身（列里超过 4 场时数据仍在，只是不渲染）
+        // The truncation must not affect the view model's data (columns beyond 4 keep
+        // their data; only rendering is capped)
         XCTAssertTrue(code.contains("ForEach(Array(matches.prefix(4))) { match in"),
-                      "应保留 ForEach 的 match 绑定")
+                      "the ForEach's match binding should stay")
     }
 
-    /// 卡片强制 `.dark` 后 `.primary` 是纯白（对比度过 bar）。
-    /// 但 `.secondary` 在 macOS 深色下是**半透明**的 secondaryLabelColor（≈60% 白），
-    /// 会**跟着背景一起变暗**；写死的深紫红→亮粉渐变上实测仅 2.31~2.51:1（< 3.0 大字号下限），肉眼发灰。
-    /// 量化证明见 companion 测试 `testOpaqueWhiteTextWouldMeetReadabilityBarOnGradient`（不透明白 ≥ bar）。
-    /// 因此修法：推荐卡上的小字一律用不透明白 `.white`。
-    /// 这里守住「FeaturedMatchCard 内不得再用 `.secondary`」—— 一旦有人回退成 `.secondary`，对比度会塌回发灰。
+    /// With the card forcing `.dark`, `.primary` is pure white (clears the bar), but
+    /// `.secondary` under macOS dark is a **translucent** secondaryLabelColor
+    /// (≈60% white) that **dims along with the background**: on the pinned
+    /// magenta→pink gradient it measured only 2.31–2.51:1 (< the 3.0 large-text bar),
+    /// visibly gray. Quantified in the companion test
+    /// `testOpaqueWhiteTextWouldMeetReadabilityBarOnGradient` (opaque white clears it).
+    /// Hence the fix: all small text on the featured card uses opaque `.white`.
+    /// This guards "no `.secondary` inside FeaturedMatchCard" — reverting to
+    /// `.secondary` would collapse the contrast back to gray.
     func testFeaturedCardSecondaryTextMeetsReadabilityBar() throws {
         let code = codeOnly(try sourceFile("TodayView.swift"))
         let card = try XCTUnwrap(
             qaSlice(code, from: "struct FeaturedMatchCard"),
-            "找不到 FeaturedMatchCard 定义"
+            "FeaturedMatchCard definition not found"
         )
         XCTAssertEqual(count(of: ".secondary", in: card), 0,
-            "推荐卡（FeaturedMatchCard）上的小字必须改用不透明白 .white，不能用 .secondary —— " +
-            "深紫红→亮粉渐变上 .secondary 对比度仅 2.31:1，达不到 3.0:1，肉眼发灰。")
+            "small text on the featured card (FeaturedMatchCard) must use opaque .white, never .secondary — " +
+            "on the magenta→pink gradient .secondary measures only 2.31:1, below 3.0:1, visibly gray.")
     }
 
-    /// 参照组：证明「不透明的白字」这个修法确实够用（给工程师一个明确的改法方向）。
+    /// Reference group: proves the "opaque white text" fix actually clears the bar
+    /// (giving the engineer a concrete direction).
     func testOpaqueWhiteTextWouldMeetReadabilityBarOnGradient() throws {
         let src = try sourceFile("TodayView.swift")
         let block = try XCTUnwrap(qaSlice(src, from: "let featuredCardGradient", to: "\n)"))
@@ -432,19 +462,20 @@ extension EPLViewerTests {
             let lb = luminance(bg)
             let ratio = (max(white, lb) + 0.05) / (min(white, lb) + 0.05)
             XCTAssertGreaterThanOrEqual(ratio, 3.0,
-                                        "不透明白字在端点 \(i) 的对比度应达标")
+                                        "opaque white text should clear the bar at gradient stop \(i)")
         }
     }
 }
 
 extension EPLViewerTests {
-    /// 比赛期间 60s 轮询必须只清「赛程」缓存，不能走 full clearCache()（那会把整份
-    /// FPL bootstrap / 积分榜一起清掉，导致每 60s 重下大文件）。
-    /// 护栏：invalidateFixtures() 后，内存里的 fixtures 被清、bootstrap 保留。
+    /// The live-match 60 s poll must clear only the fixtures cache, never a full
+    /// clearCache() (which would wipe the whole FPL bootstrap / standings and
+    /// re-download megabytes every 60 s). Guard: after invalidateFixtures(), the
+    /// in-memory fixtures are gone and bootstrap survives.
     func testInvalidateFixturesClearsFixturesKeepsBootstrap() async {
         let matches = (try? makeDecoder().decode(MatchesResponse.self,
                                                  from: Data(matchesJSON.utf8)).matches) ?? []
-        XCTAssertFalse(matches.isEmpty, "夹具 matchesJSON 应可解码出赛程")
+        XCTAssertFalse(matches.isEmpty, "the matchesJSON fixture should decode into fixtures")
         let bootstrap = FPLBootstrap(teams: [], elements: [], element_types: [], events: nil)
 
         await MemoryStore.shared.cacheBootstrap(bootstrap)
@@ -452,25 +483,27 @@ extension EPLViewerTests {
 
         await DataRepository.invalidateFixtures()
 
-        // 赛程被失效
+        // Fixtures invalidated
         let fixturesAfter: [Match]? = await MemoryStore.shared.cachedFixtures()
         XCTAssertNil(fixturesAfter,
-                     "invalidateFixtures 必须清掉内存赛程缓存")
-        // bootstrap 保留 —— 若误用 full clearCache()，这里会是 nil
+                     "invalidateFixtures must clear the in-memory fixtures cache")
+        // Bootstrap survives — a misused full clearCache() would make this nil
         let bootstrapAfter = await MemoryStore.shared.cachedBootstrap()
         XCTAssertNotNil(bootstrapAfter,
-                        "invalidateFixtures 不能清掉 bootstrap（否则每 60s 重下整份 bootstrap）")
+                        "invalidateFixtures must not clear the bootstrap (or every 60 s re-downloads it)")
     }
 
-    /// 端到端护栏：AppState.refresh(scoresOnly:) 的定时器路径不清整份缓存。
-    /// 预填内存 fixtures + bootstrap，调用 scoresOnly 刷新后，
-    /// fixtures 被清、bootstrap 仍在（证明没走 full clearCache，否则 bootstrap 也会被清）。
-    /// 注：CacheStore 磁盘 IO 在本沙箱被拦截，这里用内存缓存层做等价断言。
+    /// End-to-end guard: AppState.refresh(scoresOnly:) (the timer path) must not wipe
+    /// every cache. Pre-fill memory fixtures + bootstrap; after a scoresOnly refresh
+    /// the fixtures are gone but bootstrap survives (proving full clearCache wasn't
+    /// used, or bootstrap would be gone too).
+    /// Note: CacheStore disk IO is intercepted in this sandbox, so the memory layer
+    /// carries the equivalent assertions.
     @MainActor
     func testRefreshScoresOnlyDoesNotWipeAllCaches() async {
         let matches = (try? makeDecoder().decode(MatchesResponse.self,
                                                  from: Data(matchesJSON.utf8)).matches) ?? []
-        XCTAssertFalse(matches.isEmpty, "夹具 matchesJSON 应可解码出赛程")
+        XCTAssertFalse(matches.isEmpty, "the matchesJSON fixture should decode into fixtures")
         let bootstrap = FPLBootstrap(teams: [], elements: [], element_types: [], events: nil)
 
         await MemoryStore.shared.cacheBootstrap(bootstrap)
@@ -481,9 +514,9 @@ extension EPLViewerTests {
 
         let fixturesAfter: [Match]? = await MemoryStore.shared.cachedFixtures()
         XCTAssertNil(fixturesAfter,
-                     "scoresOnly 刷新必须失效赛程缓存")
+                     "a scoresOnly refresh must invalidate the fixtures cache")
         let bootstrapAfter = await MemoryStore.shared.cachedBootstrap()
         XCTAssertNotNil(bootstrapAfter,
-                        "scoresOnly 刷新不能清掉 bootstrap（否则每 60s 重下整份 bootstrap）")
+                        "a scoresOnly refresh must not clear the bootstrap (or every 60 s re-downloads it)")
     }
 }

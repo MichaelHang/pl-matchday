@@ -1,14 +1,14 @@
 import SwiftUI
 
-// MARK: - 今日：时间与筛选逻辑（纯逻辑，可单测）
+// MARK: - Today: time & filtering logic (pure logic, unit-testable)
 
-/// 带解析后开球时间的比赛，便于按时间筛选 / 排序
+/// A match with its parsed kickoff time, for time-based filtering / sorting.
 struct TimedMatch {
     let match: Match
     let kickoff: Date
 }
 
-/// 解析出开球时间并按升序排列（无法解析时间的比赛丢弃）
+/// Parse kickoff times and sort ascending (matches with unparseable times are dropped).
 func timedMatches(_ matches: [Match]) -> [TimedMatch] {
     matches
         .compactMap { m -> TimedMatch? in
@@ -19,87 +19,94 @@ func timedMatches(_ matches: [Match]) -> [TimedMatch] {
 }
 
 enum TodayFilter {
-    /// 进行中（含中场）—— 双信号：
-    /// 1. 状态为 `IN_PLAY` / `HALFTIME`；**或**
-    /// 2. 落在「开球 → 开球 + matchWindow」时间窗内且未被判为已结束。
+    /// Live (halftime included) — dual signal:
+    /// 1. status is `IN_PLAY` / `HALFTIME`; **or**
+    /// 2. inside the "kickoff → kickoff + matchWindow" window and not judged finished.
     ///
-    /// 用时间窗兜底数据源状态滞后（FPL 开球后约 8 分钟才翻 `status` / 出版比分），
-    /// 与 `AutoRefreshScheduler.schedule` 的「是否进行中」口径一致 —— 调度器已认为在直播、
-    /// 显示侧却还显示「未开赛」就是这里过去的缺口。
+    /// The time window covers source-status lag (FPL flips `status` / publishes scores
+    /// ~8 minutes after kickoff), keeping one definition with
+    /// `AutoRefreshScheduler.schedule` — otherwise the scheduler is already polling a
+    /// "live" match while the UI still shows "upcoming".
     static func isLive(_ m: Match, now: Date = Date()) -> Bool {
         if m.status == "IN_PLAY" || m.status == "HALFTIME" { return true }
-        // 延期 / 取消的比赛没在踢，但原开球时间同样会落进下方时间窗，
-        // 必须显式排除 —— 否则这场比赛在开球时间后 3h 内会被当成「进行中」
-        // （赛果卡显示 ⚽ 0-0，MatchCard 的「延期/取消」分支也永远走不到）。
+        // Postponed/canceled matches aren't being played, yet their original kickoff
+        // time lands in the window below — they must be excluded explicitly, or the
+        // match reads as "live" for 3 h after kickoff (⚽ 0-0 on the card, and
+        // MatchCard's postponed/canceled branch would become unreachable).
         if m.status == "POSTPONED" || m.status == "CANCELED" || m.status == "CANCELLED" { return false }
         guard let kickoff = parseKickoffDate(m.utcDate) else { return false }
         return kickoff <= now
             && now < kickoff.addingTimeInterval(AutoRefreshScheduler.matchWindow)
             && !isFinished(m)
     }
-    /// 已结束
+    /// Finished.
     static func isFinished(_ m: Match) -> Bool { m.status == "FINISHED" }
-    /// 未开赛（含延期 / 取消等非进行中、非已结束状态）
+    /// Upcoming (includes postponed/canceled — neither live nor finished).
     static func isUpcoming(_ m: Match, now: Date = Date()) -> Bool { !isLive(m, now: now) && !isFinished(m) }
 
-    /// date 与 reference 在 tz 时区下是否为同一天
+    /// Whether `date` and `reference` fall on the same day in `tz`.
     static func isSameDay(_ date: Date, as reference: Date, in tz: TimeZone) -> Bool {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = tz
         return cal.isDate(date, inSameDayAs: reference)
     }
 
-    /// 当天（tz 时区）的全部比赛，按开球时间升序
+    /// All matches "today" in `tz`, ascending by kickoff.
     ///
-    /// 判定规则（缺一不可）：
-    /// 1. **进行中的比赛一律算「今日」** —— 跨日进行的比赛（如北京时间 23:30 开球、打到次日凌晨）
-    ///    开球日期在所选时区里是「昨天」，但它此刻正在踢，必须显示；
-    /// 2. 其余比赛按「开球日期 == 今天（所选时区）」筛选。
+    /// Rules (all mandatory):
+    /// 1. **Live matches always count as today** — a cross-midnight match (e.g. 23:30
+    ///    Beijing kickoff running past 1 a.m.) kicked off "yesterday" in the selected
+    ///    time zone but is being played right now; it must be shown.
+    /// 2. Everything else is filtered by "kickoff date == today in the selected zone".
     static func todayMatches(from matches: [Match], now: Date = Date(), tz: TimeZone) -> [Match] {
         timedMatches(matches)
             .filter { isLive($0.match) || isSameDay($0.kickoff, as: now, in: tz) }
             .map(\.match)
     }
 
-    /// 下一场尚未开球的比赛（严格晚于 now 的第一场）
+    /// Next match not yet kicked off (strictly after `now`).
     static func nextMatch(from matches: [Match], now: Date = Date()) -> Match? {
         timedMatches(matches).first { $0.kickoff > now }?.match
     }
 }
 
-// MARK: - 自动刷新调度（纯逻辑，可单测）
+// MARK: - Auto-refresh scheduling (pure logic, unit-testable)
 
-/// 自动刷新的调度状态（纯数据，便于单测与等值比较）
+/// Scheduling state for auto-refresh (plain data, easy to test and compare).
 struct RefreshSchedule: Equatable {
-    /// 是否有比赛正在进行中（时间窗判定，见 `AutoRefreshScheduler.schedule`）
+    /// Whether a match is currently live (time-window test, see `AutoRefreshScheduler.schedule`).
     var hasLiveMatch: Bool
-    /// 下一个尚未开球的比赛开球时间；nil = 已知赛程里没有了
+    /// Next unplayed kickoff; nil = nothing left in the known schedule.
     var nextKickoff: Date?
 }
 
-/// 「比赛期间自动刷新」的定时器调度器 —— 纯函数，不联网、不读 `Date()`（`now` 显式传入）。
+/// Timer scheduler for "auto-refresh during matches" — pure functions: no network,
+/// no hidden `Date()` reads (`now` is passed explicitly).
 ///
-/// 设计目标：没比赛进行中时不再固定轮询，而是**睡到下一场开球前**（提前 `kickoffLeadTime` 醒），
-/// 空闲时几乎零轮询；同时用 `maxIdleSleep` 兜底，避免赛程空档期「睡死」永远醒不过来。
+/// Design goal: with no live match, stop fixed polling and **sleep until shortly
+/// before the next kickoff** (wake `kickoffLeadTime` early), effectively zero polling
+/// while idle; `maxIdleSleep` guards against schedule gaps so the app never sleeps
+/// forever.
 enum AutoRefreshScheduler {
-    /// 有比赛进行中时的刷新间隔
+    /// Refresh interval while a match is live.
     static let liveInterval: TimeInterval = 60
-    /// 开球前多久提前醒来（避免刚好错过开球）
+    /// How long before kickoff to wake up early (never miss kickoff itself).
     static let kickoffLeadTime: TimeInterval = 15 * 60
-    /// 空闲最长休眠：没有可推算的开球时间时，最多睡这么久就自查一次
+    /// Max idle sleep: with no inferable kickoff, self-check at least this often.
     static let maxIdleSleep: TimeInterval = 6 * 60 * 60
-    /// 一场比赛从开球算起的最大跨度（用于「是否仍在进行中」的时间窗判定）
+    /// Maximum span of a match from kickoff (for the "still live?" window test).
     static let matchWindow: TimeInterval = 3 * 60 * 60
 
-    /// 从赛程 + `now` 算出调度状态。
+    /// Compute the schedule state from fixtures + `now`.
     ///
-    /// - `hasLiveMatch`：存在一场 `TodayFilter.isLive` 为真的比赛 —— 状态信号（IN_PLAY / HALFTIME）
-    ///   或「`kickoff <= now < kickoff + matchWindow` 时间窗兜底」，延期 / 取消被显式排除。
-    ///   用时间窗兜底而非只信 `status`：刚开球时数据源状态可能还没翻
-    ///   （FPL 开球后约 8 分钟比分仍为 null，本项目有前科）。
-    ///   判定直接复用 `TodayFilter.isLive`，保证显示侧与调度侧永远同一套口径。
-    /// - `nextKickoff`：所有 `kickoff > now` 里最早的那个；都没有则 nil。
-    /// - `utcDate` 解析不出来的比赛直接跳过，不崩。
+    /// - `hasLiveMatch`: any match where `TodayFilter.isLive` holds — the status
+    ///   signal (IN_PLAY / HALFTIME) or the `kickoff <= now < kickoff + matchWindow`
+    ///   window; postponed/canceled are excluded explicitly. The window covers
+    ///   source lag rather than trusting `status` alone (FPL scores stayed null for
+    ///   ~8 minutes after kickoff once). Reusing `TodayFilter.isLive` keeps display
+    ///   and scheduler on one definition.
+    /// - `nextKickoff`: the earliest kickoff strictly after `now`; nil if none.
+    /// - Matches with unparseable `utcDate` are skipped, never crash.
     nonisolated static func schedule(matches: [Match], now: Date) -> RefreshSchedule {
         var hasLiveMatch = false
         var nextKickoff: Date?
@@ -107,14 +114,15 @@ enum AutoRefreshScheduler {
         for m in matches {
             guard let kickoff = parseKickoffDate(m.utcDate) else { continue }
 
-            // 进行中：口径与 `TodayFilter.isLive` 完全一致（状态优先 + 时间窗兜底）。
-            // 直接复用 isLive 而非重复写窗口条件：延期 / 取消的比赛原开球时间也落窗内，
-            // 若只排除 FINISHED，调度器会把它们当直播，空转 60s 轮询整整 3 小时。
+            // Live: exactly the `TodayFilter.isLive` definition (status first + window
+            // fallback). Reusing isLive instead of re-writing the window condition:
+            // postponed/canceled matches also fall inside the window, and excluding
+            // only FINISHED would have the scheduler poll a non-match for 3 hours.
             if TodayFilter.isLive(m, now: now) {
                 hasLiveMatch = true
             }
 
-            // 下一场：严格晚于 now 的最早开球时间
+            // Next: earliest kickoff strictly after now
             if kickoff > now, kickoff < (nextKickoff ?? .distantFuture) {
                 nextKickoff = kickoff
             }
@@ -122,14 +130,15 @@ enum AutoRefreshScheduler {
         return RefreshSchedule(hasLiveMatch: hasLiveMatch, nextKickoff: nextKickoff)
     }
 
-    /// 返回定时器间隔（秒）；nil = 不设定时器。**这是间隔决策的唯一入口。**
+    /// Timer interval in seconds; nil = no timer. **The single decision entry point.**
     ///
-    /// 决策表：
-    /// - `autoRefresh == true` → 固定 `liveInterval`（全局已每 60s，本项无意义）；
-    /// - `duringMatches == false` → nil（不设定时器）；
-    /// - 有比赛进行中 → `liveInterval`；
-    /// - 否则睡到下一场开球前 `kickoffLeadTime` 醒；已进入开球前窗口（或更近）→ `liveInterval`；
-    ///   无下一场 / 太久远 → `maxIdleSleep` 兜底。
+    /// Decision table:
+    /// - `autoRefresh == true` → fixed `liveInterval` (global 60 s makes this moot);
+    /// - `duringMatches == false` → nil (no timer);
+    /// - live match → `liveInterval`;
+    /// - otherwise sleep until `kickoffLeadTime` before the next kickoff; already
+    ///   inside the pre-kickoff window (or closer) → `liveInterval`;
+    ///   no next match / too far away → `maxIdleSleep`.
     nonisolated static func refreshInterval(autoRefresh: Bool,
                                             duringMatches: Bool,
                                             schedule: RefreshSchedule,
@@ -145,20 +154,20 @@ enum AutoRefreshScheduler {
     }
 }
 
-// MARK: - 推荐比赛（featured 卡片）选取
+// MARK: - Featured match selection
 
-/// 「推荐比赛」大卡片的选取逻辑 —— 今日页的视觉焦点。
-/// 按以下优先级取第一场命中（优先级 2 / 4 / 5 均为「先取最早开球时刻那一批，
-/// 同刻多场再按名次和最小选强强对话」的两级排序）：
-/// 1. 正在进行中的比赛；
-/// 2. 3.5 小时内开球的比赛 —— 取最早开球时刻，同刻多场按名次选强强对话；
-/// 3. 今日已结束的比赛（取时间最近的一场）；
-/// 4. 今日下一场未开赛 —— 取最早开球时刻，同刻多场按名次选强强对话；
-/// 5. 当前轮下一场未开赛（可跨日，如明天）—— 同优先级 2 / 4 的两级排序；
-/// 6. 走到这里说明本轮已结束 —— 在本轮全部比赛里选「强强对话」（名次和最小）的赛果；
-///    名次缺失时退回本轮最早开球那场。
+/// Pick logic for the featured-match card — the Today page's visual focal point.
+/// The first matching rule wins (rules 2 / 4 / 5 all take the earliest kickoff slot
+/// first, then break ties within the same slot by the smallest rank sum):
+/// 1. a match currently being played;
+/// 2. a match kicking off within 3.5 hours — earliest slot, marquee pairing on ties;
+/// 3. today's finished matches (the most recent one);
+/// 4. today's next unplayed match — earliest slot, marquee pairing on ties;
+/// 5. the current round's next unplayed match (may cross days) — same as 2 / 4;
+/// 6. the round is over — pick the finished result with the smallest rank sum;
+///    without rankings, fall back to the round's earliest kickoff.
 enum TodayFeatured {
-    /// 距开球多久之内算「即将开赛」
+    /// How close to kickoff counts as "about to start".
     static let upcomingWindow: TimeInterval = 3.5 * 60 * 60
 
     static func pick(from matches: [Match],
@@ -168,34 +177,36 @@ enum TodayFeatured {
                      positions: [Int: Int] = [:]) -> Match? {
         let timed = timedMatches(matches)
 
-        // 1) 进行中（多场时取最早开球的，保证结果稳定）
+        // 1) Live (earliest kickoff when several, for stability)
         if let live = timed.first(where: { TodayFilter.isLive($0.match, now: now) }) { return live.match }
 
-        // 2) 3.5 小时内开球 → 先取最早开球时刻那一批，同刻多场才按「名次和最小」选强强对话。
-        //    ⚠️ 前提：`timed` 已按开球时间**升序**（见 `timedMatches`），且 `filter` 保持顺序，
-        //    故 `chooseByRanking` 内部取 `candidates.first?.kickoff` 即「窗口内最早时刻」——
-        //    与旧的 `first(where:)`（取第一个命中）语义一致。
-        //    名次缺失时（positions 为空）rankKey 全部相等 → `min(by:)` 稳定返回最早那一场，
-        //    行为与改动前完全一致。
+        // 2) Within 3.5 h → take the earliest-slot batch first, break same-slot ties by
+        //    smallest rank sum.
+        //    ⚠️ Preconditions: `timed` is kickoff-**ascending** (see `timedMatches`) and
+        //    `filter` preserves order, so `chooseByRanking`'s `candidates.first?.kickoff`
+        //    is the earliest time in the window — same semantics as the old
+        //    `first(where:)`. With no rankings (empty positions) all rankKeys are equal
+        //    → `min(by:)` stably returns the earliest match, unchanged behavior.
         let soonCandidates = timed.filter {
             $0.kickoff > now && $0.kickoff.timeIntervalSince(now) <= upcomingWindow
         }
         if let chosen = chooseByRanking(soonCandidates, positions: positions) { return chosen.match }
 
-        // 3) 今日已结束 → 取时间最近的一场
+        // 3) Finished today → the most recent one
         let finishedToday = timed.filter {
             TodayFilter.isFinished($0.match) && TodayFilter.isSameDay($0.kickoff, as: now, in: tz)
         }
         if let last = finishedToday.last { return last.match }
 
-        // 4) 今日下一场未开赛 → 同样先取最早开球时刻那一批，同刻多场按名次和最小选强强对话。
-        //    （候选集与旧实现逐字一致，仅把「取第一个」换成 `chooseByRanking`。）
+        // 4) Today's next unplayed → same earliest-slot rule with rank tiebreak.
+        //    (Candidate set identical to the old implementation, word for word; only
+        //    "take the first" became `chooseByRanking`.)
         let todayUpcoming = timed.filter {
             TodayFilter.isUpcoming($0.match, now: now) && TodayFilter.isSameDay($0.kickoff, as: now, in: tz)
         }
         if let chosen = chooseByRanking(todayUpcoming, positions: positions) { return chosen.match }
 
-        // 5) 当前轮下一场未开赛（可跨日）→ 先取最早开球时刻，同时刻多场才按「名次和最小」选强强对话
+        // 5) Current round's next unplayed (may cross days) → same two-tier rule
         let roundUpcoming = timed.filter {
             $0.match.matchday == currentRound && TodayFilter.isUpcoming($0.match, now: now)
         }
@@ -203,37 +214,45 @@ enum TodayFeatured {
             return chosen.match
         }
 
-        // 6) 本轮已结束 → 在本轮全部比赛里选「强强对话」（两队名次和最小）的赛果。
+        // 6) Round over → pick the finished result with the smallest rank sum across
+        //    the whole round.
         //
-        // ⚠️ 不能复用 chooseByRanking：它先把候选收敛到「最早开球那一批」再比排名，
-        // 对本轮已全部结束的场景会退化成「取最早开球」—— 正是本次要修的行为
-        // （第 3 轮踢完后显示利物浦早场，而用户想看阿森纳 vs 切尔西）。
-        // 本轮比赛都已结束，开球早晚对展示没有意义，所以这里跨时段直接比名次。
+        // ⚠️ Cannot reuse chooseByRanking: it narrows to the earliest kickoff slot
+        // before comparing ranks, which degenerates to "earliest kickoff" once the
+        // whole round is finished — exactly the bug this fixes (after round 3 the card
+        // showed the early Liverpool game when the user wanted Arsenal vs Chelsea).
+        // With the round over, kickoff order is meaningless, so compare ranks across
+        // all time slots directly.
         //
-        // 名次缺失时 rankKey 全部相等，`min(by:)` 稳定返回第一个 → 仍是最早开球那场，向后兼容。
+        // Without rankings all rankKeys are equal and `min(by:)` stably returns the
+        // first → still the earliest kickoff, backwards compatible.
         let roundMatches = timed.filter { $0.match.matchday == currentRound }
         return roundMatches.min(by: {
             rankKey($0.match, positions: positions) < rankKey($1.match, positions: positions)
         })?.match
     }
 
-    /// 在若干候选比赛里挑「推荐卡」（供优先级 2 / 4 / 5 复用）。
-    /// 两级排序：
-    /// 1. 先按开球时间 —— 只取「最早那一批」同时刻开球的比赛；时间不同的比赛最早优先，
-    ///    不跨时段比排名（即使最早时刻只有一场，也直接取它，不会为「更强强对话」去推后更晚的比赛）。
-    /// 2. 同一时刻有多场时，按「两队名次和最小」选强强对话；和相同再比两队最高名次（更小者）。
-    /// 名次来自 `positions`（teamId → 名次），取不到按 `Int.max / 2` 沉底；`timed` 已按开球升序且 `min(by:)` 稳定。
+    /// Pick the featured match from candidates (shared by rules 2 / 4 / 5).
+    /// Two-tier ordering:
+    /// 1. by kickoff first — only the earliest same-time batch qualifies; matches at
+    ///    other times never outrank earlier ones (a lone earliest match wins outright,
+    ///    even if a "bigger" pairing starts later);
+    /// 2. within the same slot, smallest sum of the two ranks wins; on equal sums the
+    ///    better (lower) best-rank wins.
+    /// Ranks come from `positions` (teamId → rank); unknown ranks sink via
+    /// `Int.max / 2`. `timed` is kickoff-ascending and `min(by:)` is stable.
     private static func chooseByRanking(_ candidates: [TimedMatch], positions: [Int: Int]) -> TimedMatch? {
         guard let earliest = candidates.first?.kickoff else { return nil }
-        // 时间相同才比较排名：只保留最早开球时刻的那一批
+        // Only the same kickoff slot is compared by rank
         let sameSlot = candidates.filter { $0.kickoff == earliest }
         return sameSlot.min(by: { rankKey($0.match, positions: positions) < rankKey($1.match, positions: positions) })
     }
 
     private static func rankKey(_ m: Match, positions: [Int: Int]) -> (sum: Int, best: Int) {
-        // ⚠️ 哨兵用 `Int.max / 2` 而非 `Int.max`：两队都取不到名次时
-        // `hp + ap` 会是 `Int.max + Int.max`，debug 构建下整数溢出会直接 trap（SIGTRAP / signal 5），
-        // 表现就是测试进程崩溃。用一半的上界，和最大也只到 `Int.max`，不会溢出。
+        // ⚠️ Sentinel is `Int.max / 2`, not `Int.max`: with both ranks unknown,
+        // `hp + ap` would be `Int.max + Int.max`, overflowing and trapping in debug
+        // builds (SIGTRAP / signal 5 — a crashing test process). Half the bound sums
+        // to at most `Int.max`, no overflow.
         let unknown = Int.max / 2
         let hp = positions[m.homeTeam.id] ?? unknown
         let ap = positions[m.awayTeam.id] ?? unknown
@@ -241,10 +260,10 @@ enum TodayFeatured {
     }
 }
 
-/// 今日比赛按状态分组后的结果
+/// Today's matches grouped by status.
 struct TodayGroups {
     let live: [Match]
-    /// 未开赛（含延期 / 取消等非进行中、非已结束状态）
+    /// Upcoming (includes postponed/canceled — neither live nor finished).
     let upcoming: [Match]
     let finished: [Match]
 
@@ -252,87 +271,96 @@ struct TodayGroups {
     var isEmpty: Bool { total == 0 }
 }
 
-/// 第一列内容的来源（决定列标题）
+/// What feeds the first column (decides its title).
 ///
-/// 第一列是「正在进行中 & 近期」的合流：直播的排前面，今日已结束的接在后面，
-/// 不再二选一 —— 用户既想一眼看到正在踢的，也想顺手看到刚踢完的结果。
+/// The first column merges "live & recent": live matches first, today's finished
+/// ones after — users want both at a glance instead of choosing one.
 enum TodayLiveSource: Equatable {
-    /// 有直播（列表里同时含直播与今日已结束）
+    /// Live matches exist (the list holds live + today's finished)
     case liveAndRecent
-    /// 没有直播，只剩今日已结束
+    /// No live matches; only today's finished remain
     case recent
 }
 
-/// 第四行两列的内容
+/// Content of the bottom row's two columns.
 struct TodayColumns {
-    /// 第一列：正在进行中 & 近期（直播在前，今日已结束在后，均剔除推荐卡那场）
+    /// Column 1: live & recent (live first, finished after; featured match excluded).
     let live: [Match]
     let liveSource: TodayLiveSource
-    /// 第二列：今日开赛（剔除推荐卡那场）
+    /// Column 2: today's upcoming fixtures (featured match excluded).
     ///
-    /// 这里刻意**不做任何轮次回退**（本轮下一场 / 下一轮）——
-    /// 当前轮还是第 2 轮时，跑去把第 3 轮的赛程铺出来会让人以为轮次已经翻页。
-    /// 轮次怎么展示还没定，先只做「今日」，空就显示「暂无数据」。
+    /// Deliberately **no round fallback** (next match of this round / next round):
+    /// while the current round is still 2, spilling round 3 fixtures would look like
+    /// the round already flipped. Layout undecided — "today" only for now, empty
+    /// shows "no data".
     let upcoming: [Match]
 }
 
 // MARK: - ViewModel
 
-/// 今日视图模型（@Observable）
+/// Today view model (@Observable).
 @Observable
 final class TodayViewModel {
     var matches: [Match] = []
     var source: DataSource = .sample
     var error: AppError?
-    /// 当前轮次
+    /// Current round.
     var currentRound: Int = 1
-    /// 当前积分榜名次（teamId → 名次），供推荐卡「本轮下一场」按强强对话优先选取。
-    /// 取数走 DataRepository.standings()（带缓存 + 三级兜底，内部已有 per-level 超时），
-    /// 不再套外层预算，避免 Tier1 慢时把毫秒级 Tier2 聚合也一起中止。
+    /// Current standings positions (teamId → rank) so the featured card can prefer
+    /// marquee pairings for "next match of the round". Fetched via
+    /// DataRepository.standings() (cached, three-tier fallback, per-tier timeouts
+    /// inside) — no outer budget here, so a slow tier 1 can't cancel the
+    /// millisecond-tier 2 aggregation.
     var positions: [Int: Int] = [:]
 
     @MainActor
     func load() async {
-        // 并发取数：赛程（首屏必需）、当前轮、积分榜名次三者互不依赖取数，
-        // 一起发起能缩短「推荐卡先显示最早开球、再跳到强强对话」的闪烁窗口。
-        // （standings 内部会复用已缓存的赛程，不会重复打网络。）
+        // Concurrent fetches: fixtures (first screen), current round and standings
+        // positions are independent; firing together shortens the window where the
+        // featured card shows "earliest kickoff" before jumping to the marquee pick.
+        // (standings() reuses the cached fixtures internally; no extra network hits.)
         async let matchesResult: ([Match], DataSource) = DataRepository.matches()
         async let roundResult: Int? = withTimeBudget(seconds: 8) {
             await DataRepository.currentGameweek()
         }
-        // ⚠️ 这里**不再**套外层 8s 预算：
-        // standings() 内部已有 per-level 超时（Tier1 网络 15s/30s、Tier2 复用已缓存赛程），
-        // 自行在三级兜底间切换。若外层再卡 8s，Tier1 慢时会把整个调用中止，
-        // 导致毫秒级的 Tier2 聚合永远没机会跑 —— 名次变空、推荐卡退化成「最早开球」。
+        // ⚠️ No outer 8 s budget here on purpose:
+        // standings() already has per-tier timeouts (tier 1 network 15 s/30 s, tier 2
+        // reuses cached fixtures) and switches tiers itself. An outer 8 s cap would
+        // cancel the whole call while tier 1 is slow, so the millisecond-tier 2
+        // aggregation would never run — positions stay empty and the featured card
+        // degrades to "earliest kickoff".
         async let standingsResult: ([StandingRow], DataSource)? = try? await DataRepository.standings()
 
-        // 首屏渲染点：赛程一到立刻展示，后续数据异步补上。
+        // First-screen render point: show fixtures the moment they arrive; the rest
+        // fills in asynchronously.
         let (data, src) = await matchesResult
         matches = data
         source = src
         error = nil
 
-        // currentRound 只用于挑「推荐比赛」，锦上添花：超 8s 就退回从赛程推断当前轮，
-        // 不会阻塞上面已经渲染好的首屏。
+        // currentRound only feeds the featured pick — nice to have: past the 8 s
+        // budget it falls back to inferring the round from fixtures, never blocking
+        // the first screen above.
         let round = await roundResult
         currentRound = round ?? CurrentRoundInference.infer(from: matches) ?? 1
 
-        // 名次缺失（取数超时 / 示例数据）时 FeaturedMatchCard 的公式会自然回退成「开球最早」，不报错。
+        // Missing ranks (timeout / no data) simply degrade the featured formula to
+        // "earliest kickoff"; no error.
         if let rows = (await standingsResult)?.0, !rows.isEmpty {
             positions = Self.buildPositions(from: rows)
         }
     }
 
-    /// 把积分榜行聚合成「teamId → 名次」字典。
+    /// Aggregate standings rows into a "teamId → rank" dictionary.
     ///
-    /// 用 `uniquingKeysWith:` 而非 `uniqueKeysWithValues:`，因为同一支球队可能因
-    /// 脏数据 / 主客场拆分残留而在聚合结果里出现两次，后者在碰到重复 key 时会直接 trap。
-    /// 重复的 key 保留**先出现**的那条（名次以第一次出现的为准）。
+    /// `uniquingKeysWith:` instead of `uniqueKeysWithValues:`: dirty data or
+    /// home/away leftovers can put the same team in twice, and the latter traps on
+    /// duplicate keys. Duplicates keep the **first** occurrence.
     static func buildPositions(from rows: [StandingRow]) -> [Int: Int] {
         Dictionary(rows.map { ($0.team.id, $0.position) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// 按状态分组的今日比赛（用于头部计数与状态分布）
+    /// Today's matches grouped by status (header counts and status mix).
     func grouped(tz: TimeZone, now: Date = Date()) -> TodayGroups {
         let today = TodayFilter.todayMatches(from: matches, now: now, tz: tz)
         return TodayGroups(
@@ -342,48 +370,50 @@ final class TodayViewModel {
         )
     }
 
-    /// 推荐比赛（featured 大卡片）
+    /// The featured match (large card).
     func featured(tz: TimeZone, now: Date = Date()) -> Match? {
         TodayFeatured.pick(from: matches, currentRound: currentRound, now: now, tz: tz, positions: positions)
     }
 
-    /// 第四行两列
+    /// The bottom row's two columns.
     ///
-    /// 两列都会**剔除推荐卡那场**，避免同一场比赛在页面上重复出现两次
-    /// （推荐卡已把它作为视觉焦点展示，列里再列一次是纯冗余）。
+    /// Both columns **exclude the featured match** — it's already the focal point;
+    /// listing it again is pure duplication.
     ///
-    /// 第一列是「直播 + 今日已结束」的合流（直播在前，已结束按最近在前）；
-    /// 第二列只取**今日未开赛**，不做轮次回退（理由见 `TodayColumns.upcoming`）。
+    /// Column 1 merges live + today's finished (live first, finished most-recent
+    /// first); column 2 takes **today's upcoming only**, no round fallback (see
+    /// `TodayColumns.upcoming`).
     func columns(tz: TimeZone, now: Date = Date()) -> TodayColumns {
         let today = TodayFilter.todayMatches(from: matches, now: now, tz: tz)
         let featuredID = featured(tz: tz, now: now)?.id
         let notFeatured: (Match) -> Bool = { $0.id != featuredID }
 
-        // MARK: 第一列：直播在前（早开球的在前）+ 今日已结束在后（最近结束的在前）
+        // Column 1: live first (earliest kickoff first) + today's finished after (most recent first)
         let liveOnly = today.filter { TodayFilter.isLive($0, now: now) }.filter(notFeatured)
         let finishedToday = today.filter(TodayFilter.isFinished)
             .filter(notFeatured)
-            .reversed() // 「近期」：刚踢完的排最前
+            .reversed() // "recent": just-finished first
         let first = liveOnly + finishedToday
         let firstSource: TodayLiveSource = liveOnly.isEmpty ? .recent : .liveAndRecent
 
-        // MARK: 第二列：今日开赛（timedMatches 已按开球时间升序）
+        // Column 2: today's upcoming (timedMatches is kickoff-ascending)
         let second = today.filter { TodayFilter.isUpcoming($0, now: now) }.filter(notFeatured)
 
         return TodayColumns(live: first, liveSource: firstSource, upcoming: second)
     }
 }
 
-// MARK: - 视图
+// MARK: - View
 
-/// 今日页结构（自上而下四行）：
-/// 1. 大标题「今日 · 8月31日」；
-/// 2. 副标题「第 2 轮 · 共 10 场 · 0 场进行中」；
-/// 3. 推荐比赛大卡片（整页视觉焦点）；
-/// 4. 平均分两列：
-///    - 第一列：正在进行中 & 近期（直播在前，今日已结束在后；无直播时标题降级为「近期」）；
-///    - 第二列：今日开赛（不做轮次回退，没比赛就显示「暂无数据」）；
-///    两列都剔除推荐卡那场，空则整列不显示。
+/// Today page layout (four rows top to bottom):
+/// 1. large title "Today · Aug 31";
+/// 2. subtitle "Round 2 · 10 matches · 0 live";
+/// 3. featured match card (the page's focal point);
+/// 4. two equal columns:
+///    - column 1: live & recent (live first, finished after; title degrades to
+///      "Recent" with no live matches);
+///    - column 2: today's fixtures (no round fallback; empty shows "no data");
+///    both exclude the featured match.
 struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var vm = TodayViewModel()
@@ -414,20 +444,22 @@ struct TodayView: View {
         }
         .navigationTitle(UIString.today.text(lang))
         .task(id: appState.refreshNonce) {
-            // 后台自动轮询静默刷新：不亮全屏遮罩（否则比赛日每 60s 闪一次，非常干扰）；
-            // 首载 / 手动刷新照常。isLoading 仍无条件复位，避免极端时序下遮罩卡死。
+            // Background polling refreshes silently: no full-screen overlay (a flash
+            // every 60 s on matchdays is very disruptive); first load / manual refresh
+            // keep it. isLoading still resets unconditionally so the overlay can never
+            // stick under odd timings.
             if appState.lastRefreshSource != .background { appState.isLoading = true }
             await vm.load()
             appState.source = vm.source
             appState.isLoading = false
-            // 取数完把「是否有比赛进行中 / 下一场开球时间」回报给 AppState，
-            // 驱动自动刷新定时器在「60s 轮询」与「睡到下一场开球前」之间切换。
+            // Report "live match? / next kickoff?" to AppState so the auto-refresh
+            // timer can switch between 60 s polling and sleeping until kickoff.
             appState.reportLiveSchedule(from: vm.matches)
         }
         .overlay { if appState.isLoading { LoadingView() } }
     }
 
-    // MARK: 第 1、2 行：大标题 + 副标题
+    // MARK: Rows 1 & 2: large title + subtitle
 
     private var header: some View {
         let lang = appState.language
@@ -443,7 +475,7 @@ struct TodayView: View {
         }
     }
 
-    /// 仅日期：中文「8月31日」/ 英文「Aug 31」
+    /// Date only: Chinese "8月31日" / English "Aug 31".
     private var todayDateText: String {
         let lang = appState.language
         let df = DateFormatter()
@@ -453,11 +485,11 @@ struct TodayView: View {
         return df.string(from: Date())
     }
 
-    // MARK: 第 4 行：平均分两列
+    // MARK: Row 4: two equal columns
 
-    /// 第四行：固定两张小卡片（左右各一张），无论有无数据都显示。
-    /// 空内容时显示「暂无数据」占位，避免页面在轮次间隙只剩一张孤零零的大卡。
-    /// 卡片右上角的「查看全部 →」会跳到赛程板块看完整列表。
+    /// Bottom row: always two small cards (left/right), with or without data.
+    /// Empty content shows a "no data" placeholder so the page never shows one lonely
+    /// large card between rounds. The "View all →" link jumps to the fixtures section.
     private func columnsView(_ cols: TodayColumns) -> some View {
         let lang = appState.language
         return HStack(alignment: .top, spacing: 16) {
@@ -474,7 +506,7 @@ struct TodayView: View {
         }
     }
 
-    /// 单列小卡片：标题 + 「查看全部」链接 + 比赛列表或「暂无数据」占位
+    /// One column card: title + "view all" link + match list or empty placeholder.
     private func columnCard(title: String, matches: [Match]) -> some View {
         let lang = appState.language
         return VStack(alignment: .leading, spacing: 12) {
@@ -505,11 +537,12 @@ struct TodayView: View {
                     .padding(.vertical, 6)
             } else {
                 VStack(spacing: 8) {
-                    // 每列最多 4 场：两列共用 columnCard，改一次两列都生效。
-                    // 超出 4 场的部分走卡片右上角「查看全部 →」跳赛程页，
-                    // 不在卡片里堆长列表（两列都堆满会把今日页撑得需要滚很久）。
+                    // Max 4 matches per column: both columns share columnCard, one
+                    // change covers both. The rest go through "View all →" to the
+                    // fixtures page — two long lists would make Today scroll forever.
                     ForEach(Array(matches.prefix(4))) { match in
-                        // 今日页：球队靠两边（主队贴左、客队贴右），与赛程页的"贴中间比分"区分
+                        // Today page: teams flanking the edges (home left, away right),
+                        // distinct from the fixtures page's "hug the score" layout.
                         MatchCard(match: match, teamsFlankSides: true)
                     }
                 }
@@ -521,37 +554,40 @@ struct TodayView: View {
     }
 }
 
-// MARK: - 推荐比赛大卡片
+// MARK: - Featured match card
 
-/// 推荐卡圆角。
+/// Featured card corner radius.
 ///
-/// `.glassEffect()` 不指定形状时，macOS 26 会按容器自动取一个很大的圆角（视觉上 26pt 往上），
-/// 用在内容卡片上过于圆钝、抢戏。这里显式指定：
-/// - Apple 的圆角随容器尺寸递增，但「内容型卡片」不需要 sheet / modal 那种大圆角；
-/// - 12pt 与 macOS 窗口圆角（约 10pt）同一量级，读作「卡片」而不喧宾夺主；
-/// - 刻意写死而非吃默认值 —— 每个数值都该是可辩护的选择（Craft）。
+/// Without an explicit shape, .glassEffect() on macOS 26 picks a container-derived
+/// corner radius (26 pt and up) — far too round for a content card. Specified here:
+/// - Apple's radius grows with container size, but content cards don't need
+///   sheet/modal radii;
+/// - 12 pt matches the macOS window corner (~10 pt) in scale, reading as "card";
+/// - pinned on purpose rather than inheriting defaults — every value should be a
+///   defensible choice.
 private let featuredCardCornerRadius: CGFloat = 12
 
-/// 卡片内「球队块」距卡片左右边缘的额外留白。
-/// 卡片本身已有 22pt 内边距，但球队块是 `maxWidth: .infinity` 撑满的，
-/// 队徽/队名会顶到离边缘只剩 22pt 的位置，视觉上「贴边」。
-/// 再补 40pt，让内容区与玻璃边缘之间留出一口气（Apple 的 breathing room），
-/// 同时比分/时间仍稳稳居中，球队块不至于被挤到中间。
+/// Extra inset between the team blocks and the card's left/right edges.
+/// The card already has 22 pt padding, but the team blocks are
+/// `maxWidth: .infinity` — crests/names would sit 22 pt from the edge, visually
+/// "glued" to it. +40 pt gives the content breathing room from the glass while the
+/// score/time stay centered and the teams don't crowd the middle.
 private let featuredCardSideInset: CGFloat = 40
 
-/// 推荐卡写死的渐变背景（深紫红 → 亮粉，左→右），不随 macOS 系统强调色变。
-/// 用户看了「系统强调色 × Liquid Glass」渲染出的紫红渐变觉得炫酷，
-/// 明确选择把这张卡的颜色固定下来 —— 所以这里是常量、不读 AppState.accent。
+/// The card's pinned gradient (deep magenta → bright pink, left→right), independent
+/// of the macOS accent color. The "accent color × Liquid Glass" purple looked cool
+/// enough that the user chose to freeze this card's colors — hence a constant that
+/// never reads AppState.
 private let featuredCardGradient = LinearGradient(
     colors: [
-        Color(red: 0.45, green: 0.05, blue: 0.35),   // 深紫红（左）
-        Color(red: 0.92, green: 0.20, blue: 0.55),   // 亮粉（右）
+        Color(red: 0.45, green: 0.05, blue: 0.35),   // deep magenta (left)
+        Color(red: 0.92, green: 0.20, blue: 0.55),   // bright pink (right)
     ],
     startPoint: .leading,
     endPoint: .trailing
 )
 
-/// 今日页第三行：整页视觉焦点的推荐比赛卡片
+/// Row 3 of the Today page: the featured match card, the page's focal point.
 struct FeaturedMatchCard: View {
     @Environment(AppState.self) private var appState
     let match: Match
@@ -562,31 +598,32 @@ struct FeaturedMatchCard: View {
 
     private var kickoff: Date? { parseKickoffDate(match.utcDate) }
 
-    /// 开球至今已踢的分钟数（向下取整）—— **纯函数**，`now` 由调用方显式传入。
+    /// Minutes elapsed since kickoff (floored) — a **pure function**; `now` is passed in.
     ///
-    /// 下限 clamp 到 0 —— 赛前状态已置 IN_PLAY、或本机时钟与服务端有偏差时避免出负数。
-    /// 拿不到开球时间返回 nil。
+    /// Clamped at 0 so a pre-match IN_PLAY status or clock skew can't produce
+    /// negatives. Returns nil when kickoff is unparseable.
     ///
-    /// ⚠️ 刻意**不再**在计算属性里偷偷读 `Date()`：实时路径由 `centerBlock` 里的
-    /// `TimelineView(.periodic(by: 1))` 每秒把 `context.date` 传进来。这样既让「时间 → 文本」
-    /// 整条链路可单测，也避免 SwiftUI 在 `match` 未变时跳过本卡 body 求值导致分钟数冻结。
+    /// ⚠️ Deliberately does **not** read `Date()` inside the property: the live path
+    /// feeds `context.date` from `TimelineView(.periodic(by: 1))` in `centerBlock`.
+    /// That keeps the whole "time → text" chain unit-testable and avoids SwiftUI
+    /// skipping this card's body (frozen minutes) when `match` doesn't change.
     nonisolated static func elapsedMinutes(kickoff: Date?, now: Date) -> Int? {
         guard let kickoff else { return nil }
         return max(0, Int(floor(now.timeIntervalSince(kickoff) / 60)))
     }
 
-    /// 把「已踢分钟数」渲染成足球惯用记法（19' / 45' / 90+'）。
+    /// Render elapsed minutes in football notation (19' / 45' / 90+').
     ///
-    /// 抽成不依赖 `Date()` 的纯函数，便于单测覆盖各分支。规则：
-    /// - 中场休息（HALFTIME）→ 固定 45'
-    /// - 上半场（≤45）→ 实际分钟
-    /// - 中场休息区间（46–60，状态还没翻成 HALFTIME 的情况）→ 钳到 45'
-    /// - 下半场（61–105）→ 实际分钟扣掉中场的 15 分钟
-    /// - 补时 / 超长（>105）→ 钳到 90+'
+    /// A pure function (no `Date()`) so every branch is testable. Rules:
+    /// - halftime (HALFTIME) → fixed 45'
+    /// - first half (≤45) → actual minutes
+    /// - halftime window (46–60, status not yet HALFTIME) → clamp to 45'
+    /// - second half (61–105) → actual minutes minus the 15-minute break
+    /// - stoppage / very long (>105) → clamp to 90+'
     ///
     /// - Parameters:
-    ///   - elapsed: 开球后已过分钟数（调用方保证 ≥ 0）
-    ///   - isHalftime: 是否处于中场休息
+    ///   - elapsed: minutes since kickoff (caller guarantees ≥ 0)
+    ///   - isHalftime: whether the match is at halftime
     nonisolated static func formatLiveClock(elapsed: Int, isHalftime: Bool) -> String {
         if isHalftime { return "45'" }
         if elapsed <= 45 { return "\(elapsed)'" }
@@ -595,30 +632,32 @@ struct FeaturedMatchCard: View {
         return "90+'"
     }
 
-    /// 卡片中间大槽该显示什么 —— 抽成纯函数（不依赖网络 / 时钟），便于单测覆盖每个分支。
+    /// What the card's center slot should show — a pure function (no network / clock)
+    /// so each branch is testable.
     ///
-    /// 判定顺序（**顺序不能变**）：
-    /// 1. 有比分（`score?.fullTime?.home` 与 `.away` 均非 nil）→ `.score`；
-    /// 2. 否则若进行中（`TodayFilter.isLive`）→ `.pendingLiveScore` —— FPL `fixtures` 在开球后
-    ///    约 8 分钟内不返回比分，此时按 `0 - 0` 显示，**不能再退化成显示开球时间**；
-    /// 3. 否则能解析出开球时间 → `.kickoff`；
-    /// 4. 全都不满足 → `.tbd`。
+    /// Decision order (**order must not change**):
+    /// 1. a score (`score?.fullTime?.home` and `.away` both non-nil) → `.score`;
+    /// 2. else if live (`TodayFilter.isLive`) → `.pendingLiveScore` — FPL fixtures
+    ///    return no score for ~8 minutes after kickoff; show `0 - 0`, **never**
+    ///    degrade to the kickoff time;
+    /// 3. else a parseable kickoff → `.kickoff`;
+    /// 4. none of the above → `.tbd`.
     ///
-    /// ⚠️ 顺序必须严格是「有比分 → live → kickoff」：若把 live 判断提到最前，
-    /// 「进行中且已有比分」会被错误地当成 `.pendingLiveScore` 而显示 0-0。
+    /// ⚠️ Order must be strictly "score → live → kickoff": lifting the live check
+    /// first would misclassify "live with a score" as `.pendingLiveScore` (0-0).
     enum CenterContent: Equatable {
-        /// 有比分；`isLive` 决定是否在大比分前加 ⚽（进行中）
+        /// A score; `isLive` decides whether ⚽ precedes it (live)
         case score(home: Int, away: Int, isLive: Bool)
-        /// 进行中但数据源尚未返回比分（FPL 开球后约 8 分钟滞后）→ UI 按 0 - 0 显示
+        /// Live but the source hasn't published a score yet (FPL lag ~8 min) → UI shows 0 - 0
         case pendingLiveScore
-        /// 未开赛 → 显示开球时间
+        /// Not kicked off → show kickoff time
         case kickoff(Date)
-        /// 拿不到比分也拿不到开球时间 → 显示「待定」
+        /// No score and no kickoff → "TBD"
         case tbd
     }
 
-    /// 见 `CenterContent` 的判定顺序说明。
-    /// `nonisolated` 与 `formatLiveClock` 一致，便于在单测里直接调用。
+    /// See `CenterContent`'s ordering notes. `nonisolated` matches `formatLiveClock`
+    /// for direct unit-test access.
     nonisolated static func centerContent(for match: Match, now: Date = Date()) -> CenterContent {
         if let home = match.score?.fullTime?.home, let away = match.score?.fullTime?.away {
             return .score(home: home, away: away, isLive: TodayFilter.isLive(match, now: now))
@@ -631,7 +670,7 @@ struct FeaturedMatchCard: View {
     var body: some View {
         let lang = appState.language
         VStack(spacing: 18) {
-            // 顶部：轮次 + 状态徽标（靠左），Spacer 撑开右侧留白
+            // Top: round + status badge (left), Spacer fills the right
             HStack(spacing: 8) {
                 if let md = match.matchday {
                     Text(String(format: UIString.roundN.text(lang), md))
@@ -642,9 +681,10 @@ struct FeaturedMatchCard: View {
                 Spacer()
             }
 
-            // 中部：主队（贴左） | 比分 / 时间（居中） | 客队（贴右）
-            // 两侧球队块各占一半、内容分别靠外缘，避免队徽队名全挤在比分旁边、卡片左右留白。
-            // （注：列表行的 MatchCard 用的是相反方向 —— 那里刻意让队名贴着比分，保证比分列竖直对齐。）
+            // Middle: home (left) | score / time (center) | away (right).
+            // Each team block takes half the width, hugging its outer edge, so
+            // crests/names don't crowd the score. (List-row MatchCards do the
+            // opposite on purpose — names hug the score for a straight score column.)
             HStack(spacing: 0) {
                 teamBlock(match.homeTeam, lang: lang, alignment: .leading)
                 Spacer(minLength: 24)
@@ -655,12 +695,14 @@ struct FeaturedMatchCard: View {
             .padding(.horizontal, featuredCardSideInset)
         }
         .padding(22)
-        // 卡片子树强制深色语义：让 .primary/.secondary 解析成白/浅灰。
-        // 否则浅色模式下文字会解析成黑字，压在写死的深紫红渐变上几乎不可读（WCAG 对比度仅 1.71:1）。
+        // Force dark semantics on the card subtree: .primary/.secondary resolve to
+        // white/light gray. Otherwise light-mode text renders near-black on the pinned
+        // magenta gradient (WCAG contrast a mere 1.71:1).
         .environment(\.colorScheme, .dark)
-        // 写死的渐变背景（不随系统强调色变）；圆角与渐变共用 featuredCardCornerRadius。
-        // 渐变之上再叠一层极淡的黑色做柔和暗化，保证亮粉端的白字（44pt 比分 / 顶部轮次与状态小字）
-        // 在两端都清晰可读，同时不损失「炫酷」观感。
+        // Pinned gradient background (never follows the accent color); corner radius
+        // shared via featuredCardCornerRadius. A faint black overlay softens the pink
+        // end so the white text (44 pt score / small round & status rows) reads on
+        // both ends without losing the pop.
         .background(
             RoundedRectangle(cornerRadius: featuredCardCornerRadius)
                 .fill(featuredCardGradient)
@@ -673,7 +715,8 @@ struct FeaturedMatchCard: View {
 
     private func teamBlock(_ team: Team, lang: AppLanguage, alignment: HorizontalAlignment) -> some View {
         VStack(spacing: 10) {
-            // 推荐卡是视觉焦点：队徽按 56pt 渲染（CrestImage 默认 20pt 是给列表行用的）
+            // The featured card is the focal point: crest at 56 pt (CrestImage's 20 pt
+            // default is for list rows).
             CrestImage(urlString: team.crest, size: 56)
             Text(team.displayName(chinese: lang == .chinese))
                 .font(.title3)
@@ -683,8 +726,9 @@ struct FeaturedMatchCard: View {
         .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
     }
 
-    /// 中部：有比分显示大比分（进行中加 ⚽），未开赛显示大时间。
-    /// 「进行中但比分缺失」（数据源滞后）按 0 - 0 显示，避免自相矛盾地退化成显示开球时间。
+    /// Center: big score when present (⚽ when live), big time when upcoming.
+    /// "Live but no score yet" (source lag) shows 0 - 0 rather than contradictorily
+    /// degrading to the kickoff time.
     private func centerBlock(lang: AppLanguage) -> some View {
         let now = Date()
         return VStack(spacing: 6) {
@@ -692,7 +736,7 @@ struct FeaturedMatchCard: View {
             case let .score(home, away, isLive):
                 scoreRow(home: home, away: away, isLive: isLive)
             case .pendingLiveScore:
-                // 进行中但数据源还没给比分 → 按 0 - 0 显示，样式与 live 比分完全一致
+                // Live, source hasn't published a score → 0 - 0, styled exactly like a live score
                 scoreRow(home: 0, away: 0, isLive: true)
             case let .kickoff(date):
                 Text(timeText(date, lang: lang))
@@ -705,13 +749,15 @@ struct FeaturedMatchCard: View {
                     .foregroundStyle(.white)
             }
 
-            // 进行中的分钟数（如 19'）是用户实时关注的信息，用大一号 + 粗体 + 纯白突出；
-            // 已结束 / 未开赛那两行只是辅助说明，保持 footnote + .white，不抢视觉。
+            // Live minutes (e.g. 19') are what users track in real time: bigger, bold,
+            // pure white. The finished/upcoming line below stays footnote + .white.
             if TodayFilter.isLive(match, now: now) {
-                // ⚠️ 用 `TimelineView(.periodic(by: 1))` 给分钟数一个**独立于数据刷新的重绘源**：
-                // 未进球（比分不变）期间 `match` 不变，SwiftUI 会跳过本卡 body 求值，过去「按
-                // `Date()` 现算」的分钟数因此冻结在最后一分钟；TimelineView 的子闭包按时间线自动
-                // 重新求值，跨分钟必然刷新。只包这一个 `Text`，不包整张卡（其余内容无需每秒重绘）。
+                // ⚠️ `TimelineView(.periodic(by: 1))` gives the minutes a redraw source
+                // independent of data refreshes: while no goal is scored `match` doesn't
+                // change and SwiftUI skips this card's body, freezing `Date()`-derived
+                // minutes at the last evaluated minute. The timeline re-evaluates its
+                // closure automatically, so minutes always advance. Only this one `Text`
+                // is wrapped — the rest of the card has no need for per-second redraws.
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(statusLine(lang: lang, now: context.date))
                         .font(.title3)
@@ -727,7 +773,8 @@ struct FeaturedMatchCard: View {
         }
     }
 
-    /// 大比分一行（进行中前面带 ⚽）。`.score` 与 `.pendingLiveScore` 共用，保证两者样式逐字一致。
+    /// Score row (⚽ when live). Shared by `.score` and `.pendingLiveScore` so both
+    /// look identical.
     private func scoreRow(home: Int, away: Int, isLive: Bool) -> some View {
         HStack(spacing: 8) {
             if isLive {
@@ -742,12 +789,14 @@ struct FeaturedMatchCard: View {
         }
     }
 
-    /// 比分 / 时间下方的小字：进行中 → 已踢分钟数（如 19'）；已结束 → 已结束；未开赛 → 日期。
+    /// Small line under the score/time: live → minutes (19'); finished → finished;
+    /// upcoming → date.
     ///
-    /// `now` 由调用方显式传入 —— 实时路径来自 `TimelineView` 的 `context.date`，非实时路径传 `Date()`。
+    /// `now` comes from the caller — the live path uses `TimelineView`'s
+    /// `context.date`; otherwise `Date()`.
     private func statusLine(lang: AppLanguage, now: Date) -> String {
         if TodayFilter.isLive(match, now: now) {
-            // 拿不到开球时间就算不出分钟数，回退到「进行中」文案
+            // No kickoff time → no minutes; fall back to the "live" label
             guard let elapsed = Self.elapsedMinutes(kickoff: kickoff, now: now) else { return UIString.live.text(lang) }
             return Self.formatLiveClock(elapsed: elapsed,
                                         isHalftime: match.status == "HALFTIME")

@@ -1,13 +1,14 @@
 import XCTest
 @testable import EPLViewer
 
-// 译名:球队与球员映射 / 调试覆盖层
-// 从 EPLViewerTests.swift 按域拆出;方法仍挂在同一个 EPLViewerTests 类上。
+// Translations: team & player mappings / DEBUG override layer.
+// Split from EPLViewerTests.swift by domain; methods still live on the same class.
 
 extension EPLViewerTests {
-    // MARK: - 球队中英文映射
+    // MARK: - Team name mapping
 
-    /// 中文队名映射：chinese=true 命中返回中文、未命中回退英文；false 恒为英文
+    /// Chinese team names: chinese=true hits the table or falls back to English;
+    /// false always returns English.
     func testTeamDisplayNameChinese() throws {
         let arsenal = Team(id: 1, name: "Arsenal", shortName: "ARS", crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         XCTAssertEqual(arsenal.displayName(chinese: true), "阿森纳")
@@ -16,136 +17,151 @@ extension EPLViewerTests {
         let city = Team(id: 15, name: "Manchester City", shortName: "MCI", crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         XCTAssertEqual(city.displayName(chinese: true), "曼城")
 
-        // 未知 short_name：中文模式回退英文原名
+        // Unknown short_name: Chinese mode falls back to the English name
         let unknown = Team(id: 999, name: "Nowhere FC", shortName: "NOW", crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         XCTAssertEqual(unknown.displayName(chinese: true), "Nowhere FC")
 
-        // 缺 short_name：无法匹配中文，回退英文
+        // Missing short_name: no Chinese match possible; falls back to English
         let noShort = Team(id: 998, name: "Some Team", shortName: nil, crest: nil, venue: nil, founded: nil, coach: nil, squad: nil)
         XCTAssertEqual(noShort.displayName(chinese: true), "Some Team")
     }
 }
 
 extension EPLViewerTests {
-    // MARK: - 球员中英文名映射（PlayerNames）
+    // MARK: - Player name mapping (PlayerNames)
 
-    /// 中文模式下已知球星返回中文全名；英文模式恒为原名；未知球员回退英文原名（绝不空白/崩溃）。
-    /// 用 sentinel id（999999，不在 zhById 中）隔离出 web_name 回退路径，避免与真实 id 碰撞。
+    /// Chinese mode returns the full Chinese name for known stars; English mode
+    /// always the original; unknown players fall back to English (never blank/crash).
+    /// Uses sentinel ids (999999, absent from zhById) to isolate the web_name
+    /// fallback path, avoiding collisions with real ids.
     func testPlayerDisplayNameChineseKnownAndFallback() {
         let haaland = PlayerLite(id: 999999, name: "Haaland", nationality: nil)
         XCTAssertEqual(haaland.displayName(chinese: true), "埃尔林·哈兰德",
-                       "Haaland 应命中中文全名（web_name 回退路径）")
+                       "Haaland should hit the full Chinese name (web_name fallback path)")
         XCTAssertEqual(haaland.displayName(chinese: false), "Haaland",
-                       "英文模式恒为 FPL web_name 原名")
+                       "English mode always shows the FPL web_name")
 
         let nobody = PlayerLite(id: 999999, name: "Unknown Player", nationality: nil)
         XCTAssertEqual(nobody.displayName(chinese: true), "Unknown Player",
-                       "未知球员中文模式应回退英文原名，不能空白")
+                       "unknown players in Chinese mode fall back to the English name, never blank")
     }
 
-    /// 主键路径：FPL element id 命中时直接返回中文全名（id 跨赛季/转会稳定，优先于 web_name）。
+    /// Primary-key path: an FPL element id hit returns the Chinese name directly
+    /// (ids are stable across seasons/transfers, taking precedence over web_name).
     func testPlayerDisplayNameByIdPrimaryKey() {
-        // Haaland 的 FPL element id 长期稳定为 411；即便未来 id 漂移，web_name 回退仍给出中文，故不脆弱。
+        // Haaland's FPL element id has long been 411; even if ids drift, the web_name
+        // fallback still yields Chinese, so this isn't brittle.
         let haaland = PlayerLite(id: 411, name: "Haaland", nationality: nil)
         XCTAssertEqual(haaland.displayName(chinese: true), "埃尔林·哈兰德",
-                       "按 id 主键应命中中文全名")
+                       "the id primary key should hit the full Chinese name")
     }
 
-    /// 带重音的 web_name（如 Paquetá）应命中中文名。
+    /// Accented web_names (like Paquetá) must still hit the Chinese table.
     func testPlayerNameAccentedWebNameMatches() {
-        // Paquetá 已不在 2026/27 阵容（FPL 无此人），故改用同样带重音且确实入表的 Núñez。
-        // 目的：带重音的 web_name 仍能命中中文译名，而非退回英文原文。
+        // Paquetá is no longer in the 2026/27 squad (absent from FPL), so this uses
+        // the equally accented and definitely-tabulated Núñez. Goal: accented
+        // web_names still hit the Chinese name rather than reverting to English.
         let accented = PlayerLite(id: 999998, name: "Núñez", nationality: nil)
         XCTAssertEqual(accented.displayName(chinese: true), "达尔文·努涅斯")
     }
 
-    /// 维护差量工具：missing(from:) 只返回表中没有的 web_name，且已排序去重（已知项被排除）。
+    /// Maintenance diff tool: missing(from:) returns only web_names absent from the
+    /// table, sorted and deduplicated (known items excluded).
     func testPlayerNameMapMissingExcludesKnown() {
-        // Haaland / Watkins / Rice 均在数据集中；Salah 本赛季不在阵容，故也不应被当成已知。
+        // Haaland / Watkins / Rice are all in the dataset; Salah isn't in this
+        // season's squad, so he must not count as known either.
         let webNames = ["Haaland", "Watkins", "Rice", "Some New Guy", "Another New Guy", "Haaland"]
         let missing = PlayerNameMap.missing(from: webNames)
         XCTAssertFalse(missing.contains("Haaland"))
         XCTAssertFalse(missing.contains("Watkins"))
         XCTAssertFalse(missing.contains("Rice"))
         XCTAssertEqual(missing, ["Another New Guy", "Some New Guy"],
-                       "missing 应排序去重，且不含已知项")
+                       "missing should sort, dedupe, and exclude known items")
     }
 
-    /// 回归：译名表已外部化为 bundle 资源（`Resources/PlayerNames-zh-Hans.json`），
-    /// 加载器必须能在 App bundle 里找到并解码 —— 上面各 displayName 测试若全绿但本用例红，
-    /// 说明资源文件没被打进 target（pbxproj 引用丢失）。
+    /// Regression: the name tables are externalized as bundle resources
+    /// (`Resources/PlayerNames-zh-Hans.json`); the loader must find and decode them
+    /// from the app bundle — if every displayName test above is green but this one
+    /// is red, the resource isn't in the target (a lost pbxproj reference).
     func testTranslationResourcesAreBundledAndLoadable() {
-        // byId 维度（资源文件的主键表；1 与 411 是表内锚点值）
+        // byId dimension (the resource's primary table; 1 and 411 are anchor values)
         XCTAssertEqual(PlayerNameMap.builtInName(forId: 1), "戴维·拉亚")
         XCTAssertEqual(PlayerNameMap.builtInName(forId: 411), "埃尔林·哈兰德")
-        // 表必须是真实加载的完整表，而不是加载失败后的空表兜底：1..20 全命中
+        // The table must be the real fully-loaded table, not the empty fallback:
+        // ids 1..20 all hit
         XCTAssertEqual(PlayerNameMap.missing(ids: Array(1...20)), [],
-                       "id 1..20 应全部在译名表中（资源未加载时这里会全量 missing）")
-        // 球队表
+                       "ids 1..20 should all be in the table (an unloaded resource would make these all missing)")
+        // Team table
         let arsenal = Team(id: 57, name: "Arsenal", shortName: "ARS", crest: nil,
                            venue: nil, founded: nil, coach: nil, squad: nil)
         XCTAssertEqual(TeamNameMap.zh(for: arsenal), "阿森纳")
     }
 
-    /// 加载器健壮性：locale 不存在（或文件损坏）→ nil，由调用方回退空表显示英文。
+    /// Loader robustness: a missing locale (or corrupt file) → nil; the caller falls
+    /// back to an empty table and shows English.
     func testTranslationStoreMissingLocaleReturnsNil() {
         struct Payload: Decodable {}
         XCTAssertNil(TranslationStore.load("PlayerNames", locale: "xx-Nope") as Payload?,
-                     "不存在的 locale 资源应返回 nil，而不是抛错或崩溃")
+                     "a nonexistent locale resource should return nil, not throw or crash")
     }
 
-    // MARK: - 调试期球员中文名覆盖层（PlayerNameOverrides）
+    // MARK: - DEBUG player-name override layer (PlayerNameOverrides)
 
-    /// 覆盖层按 id 维度优先：覆盖 426 后返回覆盖名；复位后回退内置「布鲁诺·费尔南德斯」。
-    /// 每个测试都 defer 复位 `PlayerNameOverrides.current`，避免污染其它测试。
+    /// Overrides take precedence by id: overriding 426 returns the override; after
+    /// reset it falls back to the built-in name. Every test resets
+    /// `PlayerNameOverrides.current` via defer to avoid polluting other tests.
     func testPlayerNameOverrideByIdPrecedence() {
         defer { PlayerNameStore.current = .init() }
         PlayerNameStore.current = PlayerNameOverrides(byId: [426: "测试覆盖名"], byName: [:])
         XCTAssertEqual(
             PlayerLite(id: 426, name: "B.Fernandes", nationality: nil).displayName(chinese: true),
             "测试覆盖名",
-            "id 维度覆盖应优先于内置中文名"
+            "an id-dimension override takes precedence over the built-in Chinese name"
         )
         PlayerNameStore.current = .init()
         XCTAssertEqual(
             PlayerLite(id: 426, name: "B.Fernandes", nationality: nil).displayName(chinese: true),
             "布鲁诺·费尔南德斯",
-            "复位覆盖后应回退到内置中文名"
+            "after resetting, the built-in Chinese name returns"
         )
     }
 
-    /// 覆盖层按 name 维度：覆盖 byName["Saka"] 后返回覆盖名；复位后回退内置「布卡约·萨卡」。
-    /// 注意：id 维度优先于 name 维度，故必须用「不在 zhById 中的 id」才能落到 name 分支
-    /// （若 id 命中内置表，name 覆盖根本不会被走到）。沿用本文件既有的合成 id 约定（999998/999999）。
+    /// Overrides by name dimension: overriding byName["Saka"] returns the override;
+    /// after reset it falls back to the built-in name. Note id precedes name, so the
+    /// test must use an id **absent from zhById** to reach the name branch (an id hit
+    /// would short-circuit before the name lookup). Follows this file's synthetic-id
+    /// convention (999998/999999).
     func testPlayerNameOverrideByNamePrecedence() {
         defer { PlayerNameStore.current = .init() }
         PlayerNameStore.current = PlayerNameOverrides(byId: [:], byName: ["Saka": "测试名"])
         XCTAssertEqual(
             PlayerLite(id: 999997, name: "Saka", nationality: nil).displayName(chinese: true),
             "测试名",
-            "name 维度覆盖应优先于内置中文名"
+            "a name-dimension override takes precedence over the built-in Chinese name"
         )
         PlayerNameStore.current = .init()
         XCTAssertEqual(
             PlayerLite(id: 999997, name: "Saka", nationality: nil).displayName(chinese: true),
             "布卡约·萨卡",
-            "复位覆盖后应回退到内置中文名"
+            "after resetting, the built-in Chinese name returns"
         )
     }
 
-    /// 守卫内置默认值不被回归：无覆盖时 id 1 → 「戴维·拉亚」。
+    /// Guards the built-in defaults against regressions: with no overrides,
+    /// id 1 → the built-in Chinese name.
     func testPlayerNameOverrideDefaultsUnchanged() {
         defer { PlayerNameStore.current = .init() }
         PlayerNameStore.current = .init()
         XCTAssertEqual(
             PlayerLite(id: 1, name: "Raya", nationality: nil).displayName(chinese: true),
             "戴维·拉亚",
-            "无覆盖时应返回内置中文名"
+            "with no overrides the built-in Chinese name returns"
         )
     }
 
-    /// 直接覆盖 `PlayerNameStore.commit(_:)`：替换内存覆盖层 + 同步静态快照；
-    /// 提交空值应清空两者。落盘失败被 `save()` 吞掉，不影响内存断言。
+    /// Covers `PlayerNameStore.commit(_:)` directly: replaces the in-memory layer +
+    /// syncs the static snapshot; committing empty clears both. Disk failures are
+    /// swallowed by save() and don't affect the memory assertions.
     func testPlayerNameStoreCommit() {
         defer {
             PlayerNameStore.shared.commit(.init())
@@ -155,11 +171,11 @@ extension EPLViewerTests {
         let sample = PlayerNameOverrides(byId: [426: "提交覆盖名"], byName: [:])
 
         store.commit(sample)
-        XCTAssertEqual(store.overrides, sample, "commit 后内存覆盖层应等于提交值")
-        XCTAssertEqual(PlayerNameStore.current, sample, "commit 后静态快照应同步")
+        XCTAssertEqual(store.overrides, sample, "after commit, the in-memory layer equals the committed value")
+        XCTAssertEqual(PlayerNameStore.current, sample, "after commit, the static snapshot syncs")
 
         store.commit(.init())
-        XCTAssertEqual(store.overrides, .init(), "commit 空值应清空内存覆盖层")
-        XCTAssertEqual(PlayerNameStore.current, .init(), "commit 空值应清空静态快照")
+        XCTAssertEqual(store.overrides, .init(), "committing empty clears the in-memory layer")
+        XCTAssertEqual(PlayerNameStore.current, .init(), "committing empty clears the static snapshot")
     }
 }
