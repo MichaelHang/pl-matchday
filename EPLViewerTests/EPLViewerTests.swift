@@ -231,6 +231,35 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertNil(missing)
     }
 
+    /// Last-known-good slots must survive clearFixtures() AND clear(): the live-match
+    /// poll and a manual refresh wipe the regular caches, but the UI's final fallback
+    /// keeps the last successfully served data (match-day blank-screen regression:
+    /// poll invalidates → network fails → page went empty).
+    func testLastGoodSlotsSurviveInvalidation() async {
+        let matches = (try? makeDecoder().decode(MatchesResponse.self,
+                                                 from: Data(matchesJSON.utf8)).matches) ?? []
+        await MemoryStore.shared.cacheFixtures(matches)
+        await MemoryStore.shared.rememberFixtures(matches)
+
+        await MemoryStore.shared.clearFixtures()   // live-poll invalidation
+        let afterInvalidate = await MemoryStore.shared.cachedFixtures()
+        XCTAssertNil(afterInvalidate, "the regular fixtures slot should be cleared")
+        let last1 = await MemoryStore.shared.lastGoodFixturesSnapshot()
+        XCTAssertEqual(last1?.count, matches.count, "invalidateFixtures must not clear last-known-good")
+
+        await MemoryStore.shared.clear()           // manual refresh / clear-cache
+        let bootstrapAfter = await MemoryStore.shared.cachedBootstrap()
+        XCTAssertNil(bootstrapAfter, "precondition: clear() wipes the regular bootstrap slot")
+        let last2 = await MemoryStore.shared.lastGoodFixturesSnapshot()
+        XCTAssertEqual(last2?.count, matches.count, "clear() must not clear last-known-good either")
+
+        // An explicit remember of an empty array overwrites the slot (fetch success
+        // always remembers real data; empty only via the deliberate call)
+        await MemoryStore.shared.rememberFixtures([])
+        let overwritten = await MemoryStore.shared.lastGoodFixturesSnapshot()
+        XCTAssertEqual(overwritten?.count, 0)
+    }
+
     // MARK: - Internal model decoding
 
     /// Reuses the app's snake_case decoding setup (for internal domain models).
@@ -418,6 +447,34 @@ final class EPLViewerTests: XCTestCase {
         XCTAssertEqual(injuries.count, 2)
         XCTAssertTrue(injuries.contains { $0.player.name == "Haaland" && $0.status == "i" })
         XCTAssertTrue(injuries.contains { $0.player.name == "Watkins" && $0.status == "d" })
+    }
+
+    /// Regression: FPL marks players who LEFT the club as status "u" with a transfer
+    /// news line ("Has joined X permanently" / "on loan" / "departed as a free
+    /// agent"). Left in, they bury real injuries under transfer noise — the injury
+    /// board must exclude them while keeping genuine doubts/injuries.
+    func testFPLInjuriesFilterOutTransferDepartures() throws {
+        let team = FPLTeam(id: 1, code: 3, name: "Arsenal", short_name: "ARS", strength: nil)
+        func element(_ id: Int, _ web: String, _ status: String, _ news: String?) -> FPLPlayer {
+            FPLPlayer(id: id, web_name: web, first_name: nil, second_name: nil,
+                      team: 1, element_type: 3, goals_scored: 0, assists: 0,
+                      status: status, news: news, chance_of_playing_next_round: nil, now_cost: nil)
+        }
+        let bootstrap = FPLBootstrap(
+            teams: [team],
+            elements: [
+                element(1, "RealInjury", "i", "Hamstring injury - Expected back 24 Oct"),
+                element(2, "Transferred", "u", "Has joined Al Hilal permanently"),
+                element(3, "Loaned", "u", "Has joined Borussia Dortmund on loan for the rest of the season"),
+                element(4, "FreeAgent", "u", "has departed the club as a free agent."),
+                element(5, "Doubtful", "d", "Unspecified injury - 75% chance of playing"),
+            ],
+            element_types: [],
+            events: nil)
+
+        let injuries = FPLTranslator.injuries(from: bootstrap)
+        XCTAssertEqual(injuries.map { $0.player.name }, ["RealInjury", "Doubtful"],
+                       "transfer departures (status=u + transfer news) must not appear on the injury board")
     }
 
     /// Fixture translation: FPL fixtures → internal Matches (round / status / score / crest).
