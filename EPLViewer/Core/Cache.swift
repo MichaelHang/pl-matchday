@@ -55,6 +55,28 @@ actor MemoryStore {
 
     /// Clear fixtures only (live-match polling), keep bootstrap.
     func clearFixtures() { fixtures = nil }
+
+    // MARK: Last-known-good (in-process fallback)
+    //
+    // A copy is kept after every successful fetch. Deliberately **not** cleared by
+    // clear() / clearFixtures(): both the live-match poll and a manual refresh
+    // invalidate the caches first and then hit the network — if that network attempt
+    // fails, this is the UI's final fallback, so a failed refresh degrades to the
+    // previous data instead of wiping a populated page blank (user-reported
+    // match-day regression). Only the next successful fetch overwrites these.
+
+    private var lastGoodFixtures: [Match]?
+    private var lastGoodBootstrap: FPLBootstrap?
+    private var lastGoodStandings: ESPNStandingsCoreResponse?
+
+    func rememberFixtures(_ value: [Match]) { lastGoodFixtures = value }
+    func lastGoodFixturesSnapshot() -> [Match]? { lastGoodFixtures }
+
+    func rememberBootstrap(_ value: FPLBootstrap) { lastGoodBootstrap = value }
+    func lastGoodBootstrapSnapshot() -> FPLBootstrap? { lastGoodBootstrap }
+
+    func rememberStandings(_ value: ESPNStandingsCoreResponse) { lastGoodStandings = value }
+    func lastGoodStandingsSnapshot() -> ESPNStandingsCoreResponse? { lastGoodStandings }
 }
 
 /// Minimal on-disk cache (actor for thread safety).

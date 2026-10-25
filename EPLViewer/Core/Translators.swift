@@ -460,7 +460,20 @@ enum FPLTranslator {
         return limit > 0 ? Array(all.prefix(limit)) : all
     }
 
-    /// Injuries (status != "a").
+    /// Transfer/departure notices masquerading as unavailability: FPL marks players
+    /// who left the club as status "u" with a transfer news line ("Has joined X
+    /// permanently", "on loan", "departed as a free agent"). They don't belong on an
+    /// injury board — left in, they bury real injuries under transfer noise.
+    static func isTransferDeparture(news: String?) -> Bool {
+        guard let news, !news.isEmpty else { return false }
+        let lowered = news.lowercased()
+        return lowered.contains("joined")
+            || lowered.contains("departed")
+            || lowered.contains("free agent")
+            || lowered.contains("on loan")
+    }
+
+    /// Injuries (status != "a", excluding transfer departures).
     static func injuries(from bootstrap: FPLBootstrap) -> [Injury] {
         let teamById = Dictionary(uniqueKeysWithValues: bootstrap.teams.map { ($0.id, $0) })
         let positionMap = Dictionary(
@@ -468,6 +481,7 @@ enum FPLTranslator {
         )
         return bootstrap.elements
             .filter { $0.status != "a" }
+            .filter { !isTransferDeparture(news: $0.news) }
             .compactMap { p -> Injury? in
                 guard let fpl = teamById[p.team] else { return nil }
                 return Injury(

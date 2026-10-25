@@ -10,7 +10,21 @@ import SwiftUI
 final class AppState {
     /// Eagerly loads the player-name override layer at startup (reads any existing
     /// disk overrides). Optional, but safer.
-    init() { let _ = PlayerNameStore.shared }
+    init() {
+        let _ = PlayerNameStore.shared
+        #if DEBUG
+        // QA convenience: launch with `-section fixtures` (UserDefaults argument
+        // domain) to land directly on a section, e.g. for screenshots.
+        if let s = UserDefaults.standard.string(forKey: "section"),
+           let section = AppSection(rawValue: s) {
+            selected = section
+        }
+        // QA convenience: `-force_stale 1` pins the offline badge for visual checks.
+        if UserDefaults.standard.bool(forKey: "force_stale") {
+            source = .stale
+        }
+        #endif
+    }
 
     /// Main sections.
     enum AppSection: String, CaseIterable, Identifiable {

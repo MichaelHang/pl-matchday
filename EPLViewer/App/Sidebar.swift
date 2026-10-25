@@ -12,6 +12,9 @@ struct Sidebar: View {
                 .padding(.vertical, 4)
         }
         .listStyle(.sidebar)
+        // Brand-purple selection highlight — PL's signature #37003C, giving the
+        // otherwise stock sidebar a brand anchor.
+        .tint(Color.eplPurple)
         .navigationTitle(String(format: UIString.appTitle.text(appState.language),
                                 SeasonStore.seasonLabel))
         // Note: never stack .glassEffect() on a self-sizing container like List.

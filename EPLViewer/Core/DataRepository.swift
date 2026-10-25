@@ -48,7 +48,10 @@ enum DataRepository {
             let resp = try await ESPNProvider().fetchStandings(season: season)
             await CacheStore.shared.set(kStandings, value: resp)
             let rows = ESPNTranslator.standingRows(from: resp)
-            if !rows.isEmpty { return (rows, .live) }
+            if !rows.isEmpty {
+                await MemoryStore.shared.rememberStandings(resp)
+                return (rows, .live)
+            }
         } catch {
             // v3 failed; fall through to the next tier
         }
@@ -65,6 +68,12 @@ enum DataRepository {
         // 3. Stale v3 standings cache (stale-if-error)
         if let stale: ESPNStandingsCoreResponse = await CacheStore.shared.getStale(kStandings) {
             let rows = ESPNTranslator.standingRows(from: stale)
+            if !rows.isEmpty { return (rows, .stale) }
+        }
+
+        // 3.5 In-process last-known-good (see matches() step 4.5)
+        if let last = await MemoryStore.shared.lastGoodStandingsSnapshot() {
+            let rows = ESPNTranslator.standingRows(from: last)
             if !rows.isEmpty { return (rows, .stale) }
         }
 
@@ -93,13 +102,21 @@ enum DataRepository {
         if let ms = await withTimeBudget(seconds: 20, operation: { await fetchMatchesFromNetwork() }) {
             await CacheStore.shared.set(cacheKey, value: ms)
             await MemoryStore.shared.cacheFixtures(ms)
+            await MemoryStore.shared.rememberFixtures(ms)
             return (ms, .live)
         }
         // 4) Network failed/timed out → last persisted fixtures (TTL ignored, stale-if-error).
         //    Deliberately **not** written into MemoryStore: the memory cache holds
         //    fresh data only, so later paths can't mistake stale for live.
         if let stale: [Match] = await CacheStore.shared.getStale(cacheKey), !stale.isEmpty {
+            await MemoryStore.shared.rememberFixtures(stale)
             return (stale, .stale)
+        }
+        // 4.5) In-process last-known-good: survives invalidateFixtures / clearCache, so a
+        //      failed refresh during a match day degrades to the previous data instead of
+        //      wiping a populated page blank (user-reported match-day regression).
+        if let last = await MemoryStore.shared.lastGoodFixturesSnapshot(), !last.isEmpty {
+            return (last, .stale)
         }
         // 5) Nothing at all (e.g. offline on first launch) → empty array, UI shows empty state
         return ([], .sample)
@@ -246,8 +263,13 @@ enum DataRepository {
             let resp = try await FPLProvider().fetchBootstrap()
             await CacheStore.shared.set(kBootstrap, value: resp)
             await MemoryStore.shared.cacheBootstrap(resp)
+            await MemoryStore.shared.rememberBootstrap(resp)
             return (resp, .live)
         } catch {
+            // In-process last-known-good first, then the stale disk cache
+            if let stale = await MemoryStore.shared.lastGoodBootstrapSnapshot() {
+                return (stale, .stale)
+            }
             if let stale: FPLBootstrap = await CacheStore.shared.getStale(kBootstrap) {
                 return (stale, .stale)
             }

@@ -24,6 +24,16 @@ final class LeadersViewModel {
 
     @MainActor
     func load() async {
+        // Seed from the in-process last-known-good bootstrap first (see MemoryStore)
+        if scorers.isEmpty, let last = await MemoryStore.shared.lastGoodBootstrapSnapshot() {
+            scorers = FPLTranslator.scorers(from: last, limit: 10)
+            source = .stale
+        }
+        if assists.isEmpty, let last = await MemoryStore.shared.lastGoodBootstrapSnapshot() {
+            assists = FPLTranslator.assists(from: last, limit: 10)
+            source = .stale
+        }
+
         // ⚠️ Both datasets depend on the FPL bootstrap (observed to hang for tens of
         // seconds), and they used to be awaited serially — worst case double the wait.
         // Now concurrent with a 15 s budget each: a timed-out group shows empty rather
@@ -80,7 +90,12 @@ struct LeadersView: View {
     var body: some View {
         @Bindable var appState = appState
         VStack(spacing: 0) {
-            // Type switch (goals / assists)
+            // Type switch (goals / assists).
+            // No .glassEffect() here: glass on self-sizing controls inflates the
+            // capsule upward into the title bar (the known macOS 26 pitfall — same
+            // family as the removed glass in LoadingView / Sidebar / Settings).
+            // The extra top padding keeps clear of the Liquid Glass title bar, which
+            // otherwise visually blends over the picker's first few points.
             Picker(UIString.leaders.text(appState.language), selection: $rankType) {
                 ForEach(LeadersViewModel.RankType.allCases) { type in
                     Text(type.title(appState.language)).tag(type)
@@ -89,8 +104,8 @@ struct LeadersView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal)
-            .padding(.vertical, 8)
-            .glassEffect()
+            .padding(.top, 16)
+            .padding(.bottom, 8)
 
             content
         }
@@ -113,9 +128,13 @@ struct LeadersView: View {
         if let err = vm.error {
             ErrorView(message: err.localizedDescription)
         } else if rankType == .goals && vm.scorers.isEmpty && vm.assists.isEmpty {
-            EmptyStateView(label: UIString.noScorers.text(appState.language))
+            EmptyStateView(label: UIString.noScorers.text(appState.language),
+                           retryLabel: UIString.refresh.text(appState.language),
+                           retryAction: { Task { await appState.refresh() } })
         } else if rankType == .assists && vm.assists.isEmpty {
-            EmptyStateView(label: UIString.noAssists.text(appState.language))
+            EmptyStateView(label: UIString.noAssists.text(appState.language),
+                           retryLabel: UIString.refresh.text(appState.language),
+                           retryAction: { Task { await appState.refresh() } })
         } else {
             List {
                 switch rankType {
@@ -151,9 +170,13 @@ private struct ScorerRow: View {
             rankBadge(index)
             VStack(alignment: .leading) {
                 Text(scorer.player.displayName(chinese: appState.language == .chinese)).font(.headline)
-                Text(scorer.team.displayName(chinese: appState.language == .chinese))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    CrestImage(urlString: scorer.team.crest)
+                        .frame(width: 14, height: 14)
+                    Text(scorer.team.displayName(chinese: appState.language == .chinese))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             HStack(spacing: 12) {
@@ -170,7 +193,9 @@ private struct ScorerRow: View {
         .padding(.vertical, 4)
     }
 
-    /// Glass medals for the top three (gold/silver/bronze); plain rank otherwise.
+    /// Medals for the top three (gold/silver/bronze); plain rank otherwise.
+    /// No .glassEffect() — glass over the saturated fills washes the white numbers
+    /// out to near-invisible (same macOS 26 pitfall as LoadingView / Sidebar).
     @ViewBuilder
     private func rankBadge(_ index: Int) -> some View {
         if index < 3 {
@@ -179,7 +204,6 @@ private struct ScorerRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill([Color.yellow, Color.gray, Color.brown][index]))
-                .glassEffect()
         } else {
             Text("\(index + 1)")
                 .font(.subheadline)
@@ -199,6 +223,11 @@ final class InjuriesViewModel {
 
     @MainActor
     func load() async {
+        // Seed from the in-process last-known-good bootstrap first (see MemoryStore)
+        if injuries.isEmpty, let last = await MemoryStore.shared.lastGoodBootstrapSnapshot() {
+            injuries = FPLTranslator.injuries(from: last)
+        }
+
         // ⚠️ Also depends on the FPL bootstrap: 15 s budget, empty state on timeout —
         // never an endless spinner (same rationale as LeadersViewModel).
         let result: ([Injury], DataSource)? = await withTimeBudget(seconds: 15) { () -> ([Injury], DataSource)? in
@@ -223,7 +252,9 @@ struct InjuriesView: View {
             if vm.error != nil {
                 ErrorView(message: vm.error?.localizedDescription ?? "加载失败")
             } else if vm.injuries.isEmpty {
-                EmptyStateView(label: UIString.noInjuries.text(appState.language))
+                EmptyStateView(label: UIString.noInjuries.text(appState.language),
+                               retryLabel: UIString.refresh.text(appState.language),
+                               retryAction: { Task { await appState.refresh() } })
             } else {
                 List {
                     ForEach(vm.injuries) { injury in

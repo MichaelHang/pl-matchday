@@ -35,6 +35,13 @@ final class StandingsViewModel {
         // aggregation → stale cache), each of which can burn serious time on a slow
         // network — worst case around a minute. A 25 s overall budget bounds it: on
         // timeout show the empty state, never an endless wait.
+        // Seed from the in-process last-known-good first: aggregating the previous
+        // fixtures gives an instant table while the (up to 25 s) network budget runs.
+        if rows.isEmpty, let last = await MemoryStore.shared.lastGoodFixturesSnapshot(), !last.isEmpty {
+            rows = StandingsEnricher.enrich(rows: StandingsAggregator.aggregate(matches: last), with: last)
+            source = .stale
+        }
+
         let result = await withTimeBudget(seconds: 25) { () -> ([StandingRow], DataSource)? in
             try? await DataRepository.standings()
         }
@@ -175,9 +182,7 @@ struct StandingsView: View {
                 .padding(.vertical, 4)
                 .padding(.horizontal, 10)
                 .background {
-                    Capsule().fill(active
-                        ? Color.primary.opacity(0.12)
-                        : Color.primary.opacity(0.04))
+                    Capsule().fill(active ? Color.eplSurfaceStrong : Color.eplSurface)
                 }
         }
         .buttonStyle(.plain)
@@ -208,11 +213,11 @@ struct StandingsView: View {
         // .fixedSize(vertical:true) in detailedTable/formTable instead.
         .background(
             RoundedRectangle(cornerRadius: cardCornerRadius)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.eplSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cardCornerRadius)
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+                .strokeBorder(Color.eplHairline, lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius))
     }
@@ -222,7 +227,9 @@ struct StandingsView: View {
         if vm.error != nil {
             ErrorView(message: vm.error?.localizedDescription ?? "加载失败")
         } else if vm.rows.isEmpty {
-            EmptyStateView(label: UIString.noStandings.text(lang))
+            EmptyStateView(label: UIString.noStandings.text(lang),
+                           retryLabel: UIString.refresh.text(lang),
+                           retryAction: { Task { await appState.refresh() } })
         } else {
             switch vm.tab {
             case .overall, .home, .away:
@@ -255,6 +262,9 @@ struct StandingsView: View {
             // forces the VStack's height to the sum of its children; leftover space
             // stays as scroll-view whitespace (or scrolls when content overflows).
             .fixedSize(horizontal: false, vertical: true)
+            // Breathing room below the last row: without it, row 20's relegation-red
+            // background runs flush into the card's bottom rounded corners.
+            .padding(.bottom, 8)
         }
     }
 
@@ -273,7 +283,7 @@ struct StandingsView: View {
             headerCell(UIString.points.text(lang), width: 80)
         }
         .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.05))
+        .background(Color.eplSurface)
         .overlay(alignment: .bottom) {
             Divider().opacity(0.5)
         }
@@ -395,6 +405,8 @@ struct StandingsView: View {
             }
             // Same as detailedTable: keep the last row from being stretched by the ScrollView
             .fixedSize(horizontal: false, vertical: true)
+            // Breathing room below the last row (see detailedTable)
+            .padding(.bottom, 8)
         }
     }
 
@@ -406,7 +418,7 @@ struct StandingsView: View {
             headerCell(UIString.standingsTabForm.text(lang), width: 160)
         }
         .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.05))
+        .background(Color.eplSurface)
         .overlay(alignment: .bottom) {
             Divider().opacity(0.5)
         }

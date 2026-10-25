@@ -315,6 +315,14 @@ final class TodayViewModel {
 
     @MainActor
     func load() async {
+        // Seed from the in-process last-known-good first (see MemoryStore): on a
+        // failed network attempt the page revalidates in place over the previous
+        // data instead of blanking out for the duration of the timeout.
+        if matches.isEmpty, let last = await MemoryStore.shared.lastGoodFixturesSnapshot(), !last.isEmpty {
+            matches = last
+            source = .stale
+        }
+
         // Concurrent fetches: fixtures (first screen), current round and standings
         // positions are independent; firing together shortens the window where the
         // featured card shows "earliest kickoff" before jumping to the marquee pick.
@@ -427,7 +435,9 @@ struct TodayView: View {
 
         Group {
             if vm.matches.isEmpty {
-                EmptyStateView(label: UIString.noFixtures.text(lang))
+                EmptyStateView(label: UIString.noFixtures.text(lang),
+                               retryLabel: UIString.refresh.text(lang),
+                               retryAction: { Task { await appState.refresh() } })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {

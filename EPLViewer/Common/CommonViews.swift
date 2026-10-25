@@ -12,8 +12,10 @@ struct LoadingView: View {
     @Environment(AppState.self) private var appState
     var body: some View {
         VStack(spacing: 12) {
+            // Brand-green spinner — PL's signature accent, otherwise unused
             ProgressView()
                 .controlSize(.large)
+                .tint(Color.eplGreen)
                 .frame(width: 40, height: 40)
             Text(UIString.loading.text(appState.language))
                 .foregroundStyle(.secondary)
@@ -24,8 +26,12 @@ struct LoadingView: View {
 }
 
 /// Empty-state view.
+/// `retryLabel` / `retryAction`: optional refresh button for empty states that may
+/// stem from missing data (offline / first launch) — wire them to `appState.refresh`.
 struct EmptyStateView: View {
     let label: String
+    var retryLabel: String? = nil
+    var retryAction: (() -> Void)? = nil
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
@@ -33,6 +39,15 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
             Text(label)
                 .foregroundStyle(.secondary)
+            if let retryLabel, let retryAction {
+                Button {
+                    retryAction()
+                } label: {
+                    Label(retryLabel, systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -177,4 +192,14 @@ extension Color {
     static let eplPurple = Color(hex: "#37003C")
     /// PL brand green (for data-source accents).
     static let eplGreen = Color(hex: "#00FF85")
+
+    /// Subtle surface fill for cards / pills / table backgrounds.
+    /// `Color.primary.opacity(0.04)` is nearly invisible on the dark-mode canvas
+    /// (4% white over black); 0.10 matches the system grouped-background contrast
+    /// while staying just as subtle in light mode.
+    static let eplSurface = Color.primary.opacity(0.10)
+    /// Stronger surface fill for the active/selected pill or chip state.
+    static let eplSurfaceStrong = Color.primary.opacity(0.20)
+    /// Hairline stroke for card borders (was 0.08 — same dark-mode visibility issue).
+    static let eplHairline = Color.primary.opacity(0.14)
 }

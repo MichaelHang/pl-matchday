@@ -5,7 +5,7 @@ import SwiftUI
 /// Fixtures page view mode.
 /// - `.thisRound` single-round detail (default; lands on `focusedRound`)
 /// - `.season` season overview (grid of round cards; tapping opens that round)
-enum FixturesMode: Equatable {
+enum FixturesMode: String, Equatable {
     case thisRound
     case season
 }
@@ -67,6 +67,17 @@ final class FixturesViewModel {
     var error: AppError?
     /// Mode: this round / season overview.
     var mode: FixturesMode = .thisRound
+
+    #if DEBUG
+    init() {
+        // QA convenience: launch with `-fixtures_mode season` (UserDefaults argument
+        // domain) to land on the season overview, e.g. for screenshots.
+        if let raw = UserDefaults.standard.string(forKey: "fixtures_mode"),
+           let m = FixturesMode(rawValue: raw) {
+            mode = m
+        }
+    }
+    #endif
     /// The round being viewed — shown in "this round" mode; tapping an overview card
     /// rewrites it and switches back to `.thisRound`. Changing it (initial focus, or
     /// jumping from an overview card) aligns the round window to it; when already in
@@ -168,6 +179,14 @@ final class FixturesViewModel {
 
     @MainActor
     func load() async {
+        // Seed from the in-process last-known-good first (see MemoryStore): on a
+        // failed network attempt the page revalidates in place over the previous
+        // data instead of blanking out (chips, groups and focus all render from it).
+        if matches.isEmpty, let last = await MemoryStore.shared.lastGoodFixturesSnapshot(), !last.isEmpty {
+            matches = last
+            source = .stale
+        }
+
         let (data, src) = await DataRepository.matches()
         matches = data // didSet rebuilds the indexes and refreshes availableRounds
         source = src
@@ -532,7 +551,9 @@ struct FixturesView: View {
             if vm.error != nil {
                 ErrorView(message: vm.error?.localizedDescription ?? "加载失败")
             } else if vm.matches.isEmpty {
-                EmptyStateView(label: UIString.noFixtures.text(lang))
+                EmptyStateView(label: UIString.noFixtures.text(lang),
+                               retryLabel: UIString.refresh.text(lang),
+                               retryAction: { Task { await appState.refresh() } })
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -601,6 +622,27 @@ struct FixturesView: View {
         // Round switch pills (kept alongside the season overview)
         modeBar(lang: lang)
 
+        // Season progress bar: rounds played / total, brand pink to match the
+        // current-round accents. Rendered only when FPL events data exists — the
+        // unavailable-data fallback (38 rounds at 0%) would read as a broken bar.
+        if let progress {
+            VStack(alignment: .leading, spacing: 6) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.eplSurfaceStrong)
+                        Capsule().fill(accentPink)
+                            .frame(width: max(0, geo.size.width * progress.fraction))
+                    }
+                }
+                .frame(height: 6)
+                Text(String(format: UIString.seasonProgressFormat.text(lang),
+                            progress.playedRounds, progress.totalRounds))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 4)
+        }
+
         // Card grid
         let snapshots = vm.roundSnapshots(seasonProgress: progress)
         LazyVGrid(
@@ -652,9 +694,7 @@ struct FixturesView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background {
-                    Capsule().fill(active
-                        ? Color.primary.opacity(0.12)
-                        : Color.primary.opacity(0.04))
+                    Capsule().fill(active ? Color.eplSurfaceStrong : Color.eplSurface)
                 }
         }
         .buttonStyle(.plain)
@@ -752,9 +792,7 @@ struct FixturesView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background {
-                    Capsule().fill(active
-                        ? Color.primary.opacity(0.18)
-                        : Color.primary.opacity(0.04))
+                    Capsule().fill(active ? Color.eplSurfaceStrong : Color.eplSurface)
                 }
         }
         .buttonStyle(.plain)
@@ -852,10 +890,10 @@ struct SeasonOverviewCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.eplSurface)
                 .overlay {
                     RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(isCurrent ? accent.opacity(0.6) : Color.primary.opacity(0.08),
+                        .strokeBorder(isCurrent ? accent.opacity(0.6) : Color.eplHairline,
                                       lineWidth: isCurrent ? 1.2 : 0.5)
                 }
         }
@@ -938,10 +976,10 @@ struct MatchGridCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.eplSurface)
                 .overlay {
                     RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        .strokeBorder(Color.eplHairline, lineWidth: 0.5)
                 }
         }
     }

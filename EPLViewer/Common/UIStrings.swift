@@ -75,6 +75,9 @@ extension UIString {
     static let autoRefreshDuringMatches     = UIString(zh: "比赛期间自动刷新", en: "Auto-refresh during matches")
     static let autoRefreshDuringMatchesHint = UIString(zh: "已开启全局自动刷新，此项无需设置", en: "Global auto-refresh is on; this setting is not needed")
     static let refreshNow    = UIString(zh: "立即刷新所有", en: "Refresh All Now")
+    /// Top-bar badge shown only when a section loaded stale fallback data
+    /// (network failed, last cached content served).
+    static let staleBadge    = UIString(zh: "离线数据", en: "Offline data")
     static let cache         = UIString(zh: "缓存", en: "Cache")
     static let clearCache    = UIString(zh: "清空本地缓存", en: "Clear Local Cache")
     static let dataSourceDesc = UIString(
@@ -134,6 +137,8 @@ extension UIString {
     // Season overview page
     /// "2026 Season" title (%d = the season's starting year)
     static let seasonHeader        = UIString(zh: "%d 赛季", en: "%d Season")
+    /// Progress-bar caption "6 / 38 rounds played" (played / total)
+    static let seasonProgressFormat = UIString(zh: "已踢 %d / %d 轮", en: "%d of %d rounds played")
     /// "VS"
     static let seasonPreviewVs     = UIString(zh: "VS", en: "VS")
 
