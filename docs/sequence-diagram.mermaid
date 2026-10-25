@@ -1,48 +1,52 @@
 sequenceDiagram
     autonumber
     actor User
-    participant App as EPLViewerApp
-    participant State as AppState
-    participant UI as ContentView/Sidebar/TopBar
-    participant VM as StandingsViewModel
+    participant View as Section View (Today/Fixtures/Standings/…)
+    participant VM as Section ViewModel
     participant Repo as DataRepository
-    participant Key as APIKeyStore
-    participant API as APIClient
-    participant Local as LocalDataLoader
+    participant Mem as MemoryStore (session + last-known-good)
+    participant Disk as CacheStore (disk, TTL)
+    participant Net as FPL / ESPN public APIs
+    participant State as AppState
+    participant Sched as AutoRefreshScheduler
 
-    App->>State: init() 读取 UserDefaults(season, apiKey)
-    State-->>UI: source 待定 / season="2024"
-    User->>UI: 选择「积分榜」
-    UI->>VM: .onAppear → load(season)
-    VM->>VM: state = .loading
-    VM->>Repo: fetchStandings(season)
-    Repo->>Key: hasKey ?
-    alt 无 API Key
-        Repo->>Local: loadStandings(season)
-        Local-->>Repo: [Standing]
-        Repo-->>VM: (items, .local)
-        VM->>State: source = .local
-    else 有 API Key
-        Repo->>API: get(.standings, token)
-        alt HTTP 200
-            API-->>Repo: JSON
-            Repo->>Repo: decode → [Standing]
-            Repo-->>VM: (items, .api)
-            VM->>State: source = .api
-        else 429 / 网络错误
-            Repo->>Local: loadStandings(season)
-            Local-->>Repo: [Standing]
-            Repo-->>VM: (items, .local)
-            VM->>State: source = .local
-        else 其他 API 错误(403/400)
-            Repo-->>VM: throw EPLViewerError
-            VM->>VM: state = .error
+    Note over View,Net: Fetch chain — see docs/system_design.md §3.2
+
+    View->>VM: .task(id: refreshNonce) → load()
+    VM->>Mem: seed from lastGoodFixturesSnapshot() (instant, .stale)
+    VM->>Repo: matches()
+
+    Repo->>Mem: cachedFixtures() (session cache)
+    alt session hit
+        Mem-->>Repo: [Match] → (.live)
+    else miss
+        Repo->>Disk: get(key, ttl = 5 min)
+        alt disk hit
+            Disk-->>Repo: [Match] → (.live)
+        else miss / TTL expired
+            Repo->>Net: FPL fixtures (→ ESPN scoreboard fallback), 20 s budget
+            alt network success
+                Net-->>Repo: [Match]
+                Repo->>Disk: set(key, value)
+                Repo->>Mem: cacheFixtures + rememberFixtures (last-known-good)
+                Repo-->>VM: ([Match], .live)
+            else network failed / timed out
+                Repo->>Disk: getStale(key) → (.stale)
+                Repo->>Mem: lastGoodFixturesSnapshot() → (.stale)
+                Note over Repo: only a process that never fetched successfully yields empty
+            end
         end
     end
-    VM-->>UI: items / state
-    UI->>UI: 渲染 StandingsView（或 Loading/Empty/Error 三态）
-    State-->>UI: TopBar 显示来源标识（示例数据 / football-data.org）
-    User->>UI: 点击刷新
-    UI->>VM: refresh()
-    VM->>Repo: fetchStandings(season)（经 CacheStore 节流）
-    Note over Repo,Local: 重复上述回退决策
+    Repo-->>VM: ([Match], DataSource)
+    VM-->>View: render (previous data stays on screen while revalidating)
+
+    Note over VM,Repo: standings / scorers / assists / injuries run the same chain<br/>(bootstrap slots + ESPN v3 records → fixture aggregation tiers)
+
+    View->>State: reportLiveSchedule(matches)
+    State->>Sched: refreshInterval(schedule, now)
+    alt live match or global auto-refresh
+        Sched-->>State: 60 s poll (fixtures only, scoresOnly)
+    else idle
+        Sched-->>State: sleep until kickoff − 15 min (6 h cap)
+    end
+    State->>State: refreshTick → refresh(scoresOnly) → nonce += 1 → views reload silently

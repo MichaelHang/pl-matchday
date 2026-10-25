@@ -56,7 +56,7 @@ open build/EPLViewer.app
 │   ├── Localization/             # translations: TranslationStore + PlayerNames + TeamNames + Resources/*.json
 │   └── Common/                   # CommonViews (state views / CrestImage / brand colors) + UIStrings
 ├── EPLViewerTests/               # 200+ unit tests, split by domain (Today / Fixtures / Standings / Scheduler / Localization / Guard)
-├── docs/                         # design docs (history/ holds archived delivery snapshots)
+├── docs/                         # design docs + diagrams (mermaid)
 └── build-app.sh                  # xcodebuild release + .app bundle
 ```
 

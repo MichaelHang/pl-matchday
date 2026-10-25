@@ -1,39 +1,28 @@
 classDiagram
     direction LR
 
-    class Competition {
+    %% ── Core · domain models ──
+
+    class Match {
         +Int id
-        +String name
-        +String code
-        +String emblem
+        +Int~opt~ matchday
+        +String~opt~ utcDate
+        +String~opt~ status
+        +Team homeTeam
+        +Team awayTeam
+        +Score~opt~ score
     }
 
     class Team {
         +Int id
         +String name
-        +String shortName
-        +String tla
-        +String crest
-        +String venue
-        +Coach~opt~ coach
-        +Array~Player~ squad
+        +String~opt~ shortName
+        +String~opt~ crest
+        +nameZh
+        +displayName(chinese) String
     }
 
-    class Coach {
-        +Int id
-        +String name
-        +String nationality
-    }
-
-    class Player {
-        +Int id
-        +String name
-        +String position
-        +Int~opt~ shirtNumber
-        +String nationality
-    }
-
-    class Standing {
+    class StandingRow {
         +Int position
         +Team team
         +Int playedGames
@@ -46,181 +35,221 @@ classDiagram
         +Int goalDifference
         +String~opt~ form
         +String~opt~ status
+        +VenueStats~opt~ home
+        +VenueStats~opt~ away
     }
 
-    class Match {
-        +Int id
-        +String utcDate
-        +String status
-        +Int matchday
-        +Team homeTeam
-        +Team awayTeam
-        +Score score
-    }
-
-    class Score {
-        +ScoreDetail fullTime
-        +ScoreDetail halfTime
-    }
-
-    class ScoreDetail {
-        +Int~opt~ home
-        +Int~opt~ away
+    class PlayerLite {
+        +Int~opt~ id
+        +String name
+        +nameZh
+        +displayName(chinese) String
     }
 
     class Scorer {
-        +Player player
+        +PlayerLite player
         +Team team
         +Int goals
         +Int~opt~ assists
-        +Int~opt~ playedMatches
     }
 
-    class DataSource {
-        <<enum>>
-        +api
-        +local
-        +label String
+    class Injury {
+        +PlayerLite player
+        +Team team
+        +String status
+        +String~opt~ news
+        +Int~opt~ chanceOfPlayingNextRound
     }
 
-    Team "1" *-- "0..1" Coach : has
-    Team "1" *-- "0..*" Player : squad
-    Standing --> Team : team
-    Match --> Team : homeTeam
-    Match --> Team : awayTeam
-    Match --> Score : score
-    Score *-- ScoreDetail : fullTime
-    Score *-- ScoreDetail : halfTime
-    Scorer --> Player : player
-    Scorer --> Team : team
+    %% ── Core · data layer ──
 
-    class Endpoint {
-        <<enum>>
-        +standings(season String)
-        +matches(season String)
-        +teams
-        +team(id Int)
-        +scorers(season String)
-        +path String
-        +query Array~URLQueryItem~
+    class DataRepository {
+        <<enumeration>>
+        +matches() tuple
+        +standings() tuple
+        +scorers() tuple
+        +assists() tuple
+        +injuries() tuple
+        +gameweeks() array
+        +currentGameweek() Int~opt~
+        +invalidateFixtures()
+        +clearCache()
+        +shouldFallback(err) Bool
     }
 
-    class APIClient {
-        -URLSession session
-        +get(_ endpoint Endpoint, token String) async throws Data
-    }
-
-    class APIKeyStore {
-        -UserDefaults defaults
-        +key String~opt~ {get set}
-        +hasKey Bool
-    }
-
-    class SeasonStore {
-        -UserDefaults defaults
-        +current String
-        +available Array~String~
-    }
-
-    class LocalDataLoader {
-        -Bundle bundle
-        +loadStandings(season String) Array~Standing~
-        +loadMatches(season String) Array~Match~
-        +loadTeams() Array~Team~
-        +loadScorers(season String) Array~Scorer~
-        +loadCompetition() Competition
+    class MemoryStore {
+        <<actor>>
+        +cachedFixtures() array~opt~
+        +cachedBootstrap() FPLBootstrap~opt~
+        +rememberFixtures(array)
+        +lastGoodFixturesSnapshot() array~opt~
+        +rememberBootstrap(FPLBootstrap)
+        +lastGoodBootstrapSnapshot() FPLBootstrap~opt~
+        +rememberStandings(ESPNStandingsCoreResponse)
+        +lastGoodStandingsSnapshot() ESPNStandingsCoreResponse~opt~
+        +clear()
+        +clearFixtures()
     }
 
     class CacheStore {
-        -NSCache cache
-        +value(forKey String) Any~opt~
-        +set(_ value Any, forKey String)
+        <<actor>>
+        +get(key, ttl) T~opt~
+        +getStale(key) T~opt~
+        +set(key, value)
+        +remove(key)
+        +clear()
     }
 
-    class DataRepository {
-        -APIClient api
-        -APIKeyStore keyStore
-        -LocalDataLoader local
-        -CacheStore cache
-        +fetchStandings(season String) async ([Standing], DataSource)
-        +fetchMatches(season String) async ([Match], DataSource)
-        +fetchTeams() async ([Team], DataSource)
-        +fetchTeam(id Int) async (Team, DataSource)
-        +fetchScorers(season String) async ([Scorer], DataSource)
+    class FPLProvider {
+        +fetchBootstrap() FPLBootstrap
+        +fetchFixtures() array
     }
 
-    APIClient --> Endpoint : builds URL
-    DataRepository --> APIClient : uses
-    DataRepository --> APIKeyStore : reads
-    DataRepository --> LocalDataLoader : fallback
-    DataRepository --> CacheStore : caches
+    class ESPNProvider {
+        +fetchStandings(season) ESPNStandingsCoreResponse
+        +fetchScoreboardSchedule(dates) ESPNScoreboardResponse
+    }
+
+    class FPLTranslator {
+        <<enumeration>>
+        +matches(fixtures, teams) array
+        +teams(bootstrap) array
+        +scorers(bootstrap, limit) array
+        +assists(bootstrap, limit) array
+        +injuries(bootstrap) array
+        +isTransferDeparture(news) Bool
+    }
+
+    class ESPNTranslator {
+        <<enumeration>>
+        +standingRows(resp) array
+        +matches(resp) array
+        +stableID(string) Int
+    }
+
+    class StandingsAggregator {
+        <<enumeration>>
+        +aggregate(matches) array
+    }
+
+    class StandingsEnricher {
+        <<enumeration>>
+        +enrich(rows, matches) array
+        +venueStats(teamId, matches, isHome) VenueStats~opt~
+        +formString(teamId, matches, last) String~opt~
+    }
+
+    %% ── App ──
 
     class AppState {
-        <<@Observable>>
-        +DataSource source
-        +String season
-        +Section selection
-        +Bool showSettings
+        <<observable>>
+        +selected AppSection
+        +language AppLanguage
+        +timeZone DisplayTimeZone
+        +source DataSource
+        +refreshNonce Int
+        +autoRefreshDuringMatches Bool
+        +lastKnownMatches array
+        +refresh(scoresOnly)
+        +reportLiveSchedule(matches)
+        +configureAutoRefresh()
+    }
+
+    class AutoRefreshScheduler {
+        <<enumeration>>
+        +schedule(matches, now) RefreshSchedule
+        +refreshInterval(...) TimeInterval~opt~
+    }
+
+    %% ── Features · view models ──
+
+    class TodayViewModel {
+        <<observable>>
+        +matches array
+        +currentRound Int
+        +positions Map
+        +load()
+        +featured(tz) Match~opt~
+        +columns(tz) TodayColumns
+    }
+
+    class FixturesViewModel {
+        <<observable>>
+        +matches array
+        +focusedRound Int
+        +mode FixturesMode
+        +availableRounds array
+        +seasonProgress SeasonProgress~opt~
+        +load()
+        +roundSnapshots(progress) array
+        +initialFocusRound(...) Int
     }
 
     class StandingsViewModel {
-        <<@Observable>>
-        -DataRepository repo
-        +ViewState state
-        +Array~Standing~ items
-        +load(season String) async
-        +refresh() async
-    }
-    class FixturesViewModel {
-        <<@Observable>>
-        -DataRepository repo
-        +ViewState state
-        +Array~Match~ items
-        +filter: MatchFilter
-        +load(season String) async
-    }
-    class TeamsViewModel {
-        <<@Observable>>
-        -DataRepository repo
-        +ViewState state
-        +Array~Team~ teams
-        +selected: Team~opt~
-        +loadTeamDetail(id Int) async
-    }
-    class TopScorersViewModel {
-        <<@Observable>>
-        -DataRepository repo
-        +ViewState state
-        +Array~Scorer~ items
-        +load(season String) async
+        <<observable>>
+        +rows array
+        +tab StandingsTab
+        +load()
+        +ranked(tab) array
     }
 
-    StandingsViewModel --> DataRepository : uses
-    FixturesViewModel --> DataRepository : uses
-    TeamsViewModel --> DataRepository : uses
-    TopScorersViewModel --> DataRepository : uses
+    %% ── Localization ──
 
-    class ContentView
-    class Sidebar
-    class TopBar
-    class StandingsView
-    class FixturesView
-    class TeamsView
-    class TeamDetailView
-    class TopScorersView
-    class SettingsView
-    class LoadingView
-    class EmptyView
-    class ErrorView
+    class PlayerNameMap {
+        <<enumeration>>
+        +zh(for player) String~opt~
+        +builtInName(forId) String~opt~
+        +missing(ids) array
+    }
 
-    ContentView --> Sidebar
-    ContentView --> TopBar
-    Sidebar --> AppState : reads
-    TopBar --> AppState : reads
-    StandingsView --> StandingsViewModel : observes
-    FixturesView --> FixturesViewModel : observes
-    TeamsView --> TeamsViewModel : observes
-    TopScorersView --> TopScorersViewModel : observes
-    TeamDetailView --> TeamsViewModel : observes
-    SettingsView --> APIKeyStore : binds
-    SettingsView --> SeasonStore : binds
+    class PlayerNameStore {
+        <<observable>>
+        +overrides PlayerNameOverrides
+        +current PlayerNameOverrides
+        +commit(overrides)
+    }
+
+    class TranslationStore {
+        <<enumeration>>
+        +load(baseName, locale) T~opt~
+    }
+
+    class TeamNameMap {
+        <<enumeration>>
+        +zh(for team) String~opt~
+    }
+
+    %% ── Relations ──
+
+    DataRepository ..> FPLProvider : network
+    DataRepository ..> ESPNProvider : fallback
+    DataRepository --> MemoryStore : session + last-known-good
+    DataRepository --> CacheStore : disk (TTL)
+    DataRepository ..> FPLTranslator : derive
+    DataRepository ..> ESPNTranslator : translate
+    DataRepository ..> StandingsAggregator : standings tier 2
+
+    TodayViewModel ..> DataRepository
+    TodayViewModel ..> TodayFilter
+    TodayViewModel ..> TodayFeatured
+    FixturesViewModel ..> DataRepository
+    FixturesViewModel ..> CurrentRoundInference
+    StandingsViewModel ..> DataRepository
+    StandingsViewModel ..> StandingsAggregator
+    StandingsViewModel ..> StandingsEnricher
+
+    AppState ..> AutoRefreshScheduler
+    AppState --> PlayerNameStore : eager load
+
+    PlayerNameMap ..> TranslationStore : JSON resource
+    PlayerNameMap --> PlayerNameStore : overrides
+    TeamNameMap ..> TranslationStore : JSON resource
+
+    Match o-- Team
+    Match o-- Score
+    StandingRow o-- Team
+    StandingRow o-- VenueStats
+    Scorer o-- PlayerLite
+    Scorer o-- Team
+    Injury o-- PlayerLite
+    Injury o-- Team
