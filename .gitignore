@@ -1,46 +1,38 @@
 
-# ── Xcode / 编译产物（不要提交）──
-DerivedData/                       # Xcode 派生数据
-xcuserdata/                        # 用户专属 workspace 数据
+DerivedData/                      
+xcuserdata/                       
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
 *.xcworkspacedata
 
-# ── 构建缓存（体积巨大，必须忽略）──
 .build/
 build/
 *.app/
 .swiftpm/
 Package.resolved
 
-# ── 编译中间产物（双保险，主要在 DerivedData/.build 内）──
 *.o
-*.pcm                              # 预编译模块（Clang module cache）
+*.pcm                              # （Clang module cache）
 *.swiftmodule
 *.hmap
 *.dSYM/
 *.dSYM.zip
 
-# ── 缓存 / 时间戳 / 索引 ──
 *.timestamp
 *.modulemap
 
-# ── macOS / 系统文件 ──
 .DS_Store
 .AppleDouble
 .LSOverride
 __MACOSX/
 
-# ── 日志 ──
 *.log
 
-# ── 编辑器 / IDE ──
 .idea/
 .vscode/
 *.swp
 *~
 
-# ── 本助手工作记忆（非用户代码，不入库）──
 .workbuddy/
 
